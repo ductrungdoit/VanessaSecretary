@@ -99,15 +99,28 @@ SEARCH_TIMEOUT_MS=10000
 
 Google is used first when selected. Brave can act as a fallback. Leave the credentials unset to run without web search.
 
-## Raspberry Pi And Home Assistant OS
+## Home Assistant OS Add-on
 
-The target deployment is a Home Assistant custom add-on on Raspberry Pi 5, exposed through Cloudflare Tunnel at:
+This repository is a Home Assistant add-on repository. On Home Assistant OS:
+
+1. Open **Settings > Add-ons > Add-on Store**.
+2. Open the repository menu and select **Repositories**.
+3. Add `https://github.com/ductrungdoit/VanessaSecretary`.
+4. Install **Vanessa Secretary**.
+5. Set `openai_api_key`, `openai_base_url`, and `model` in the Configuration tab.
+6. Start the add-on and verify `http://HOME_ASSISTANT_IP:3000/chatbot/api/health`.
+
+The repository publishes separate `aarch64` and `amd64` images to GitHub Container Registry. Raspberry Pi 5 uses the `aarch64` image. A GitHub Actions workflow publishes version `1.0.0` and `latest` tags after relevant changes reach `main`.
+
+If Home Assistant cannot pull the image, verify that the `vanessa-secretary-aarch64` package is public in the repository package settings.
+
+The target public URL through Cloudflare Tunnel is:
 
 ```text
 https://domain.com/chatbot/
 ```
 
-The application-side base path and health endpoint are ready. Home Assistant add-on metadata, Cloudflare Tunnel routing, and Cloudflare Access configuration will be added in subsequent deployment steps.
+The application-side base path, health endpoint, add-on metadata, and ARM64 image workflow are included. Cloudflare Tunnel routing and Cloudflare Access are the next deployment steps.
 
 ## Security
 
