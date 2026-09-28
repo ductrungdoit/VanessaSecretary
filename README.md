@@ -110,7 +110,7 @@ This repository is a Home Assistant add-on repository. On Home Assistant OS:
 5. Set `openai_api_key`, `openai_base_url`, and `model` in the Configuration tab.
 6. Start the add-on and verify `http://HOME_ASSISTANT_IP:3000/chatbot/api/health`.
 
-The repository publishes separate `aarch64` and `amd64` images to GitHub Container Registry. Raspberry Pi 5 uses the `aarch64` image. A GitHub Actions workflow publishes version `1.0.0` and `latest` tags after relevant changes reach `main`.
+The repository publishes separate `aarch64` and `amd64` images to GitHub Container Registry. Raspberry Pi 5 uses the `aarch64` image. A GitHub Actions workflow publishes the add-on version and `latest` tags after relevant changes reach `main`.
 
 If Home Assistant cannot pull the image, verify that the `vanessa-secretary-aarch64` package is public in the repository package settings.
 
