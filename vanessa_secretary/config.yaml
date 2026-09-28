@@ -1,5 +1,5 @@
 name: Vanessa Secretary
-version: "1.0.1"
+version: "1.0.2"
 slug: vanessa_secretary
 description: Private AI secretary with streaming chat and document analysis
 url: https://github.com/ductrungdoit/VanessaSecretary
@@ -20,6 +20,12 @@ options:
   openai_base_url: https://api.openai.com/v1
   model: gpt-4o-mini
   system_prompt: You are a helpful, accurate, and concise AI assistant.
+  search_provider: google
+  google_search_api_key: ""
+  google_search_engine_id: ""
+  brave_search_api_key: ""
+  search_result_limit: 8
+  search_timeout_ms: 10000
   max_file_size_mb: 10
   max_extracted_chars: 100000
 schema:
@@ -27,5 +33,11 @@ schema:
   openai_base_url: url
   model: str
   system_prompt: str
+  search_provider: list(google|brave)
+  google_search_api_key: password?
+  google_search_engine_id: str?
+  brave_search_api_key: password?
+  search_result_limit: int(1,10)
+  search_timeout_ms: int(1000,60000)
   max_file_size_mb: int(1,25)
   max_extracted_chars: int(1000,500000)
