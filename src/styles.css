@@ -81,6 +81,10 @@ body { margin: 0; background: var(--bg); color: var(--text); transition: backgro
   border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(12px);
   flex: 0 0 auto;
 }
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.model-picker { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 0.72rem; }
+.model-picker select { max-width: 210px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); padding: 7px 28px 7px 9px; font: inherit; cursor: pointer; }
+.model-picker select:disabled { cursor: wait; opacity: 0.6; }
 [data-theme='dark'] .chat-header { background: rgba(21, 33, 27, 0.78); }
 .chat-title { font-weight: 600; letter-spacing: -0.01em; }
 .app-version { display: block; margin-top: 3px; color: var(--muted); font-size: 0.68rem; }
@@ -104,6 +108,8 @@ body { margin: 0; background: var(--bg); color: var(--text); transition: backgro
 .copy-btn svg, .retry-message-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; }
 .copy-btn:hover, .retry-message-btn:hover { color: var(--accent); }
 .message-files { margin-bottom: 10px; padding: 8px 10px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 0.8rem; font-weight: 600; }
+.message-files.has-images { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.message-files.has-images img { width: 72px; height: 72px; border-radius: 9px; object-fit: cover; border: 1px solid var(--border); }
 
 .composer { flex: 0 0 auto; width: 100%; padding: 20px clamp(16px, 4vw, 80px) 28px; background: linear-gradient(to top, var(--bg) 60%, transparent); }
 .attachment-list { display: flex; gap: 8px; max-width: 100%; overflow-x: auto; padding: 0 2px 10px; }
@@ -166,6 +172,8 @@ textarea {
   .sidebar { position: fixed; inset: 0 0 0 auto; width: 280px; transform: translateX(100%); z-index: 20; }
   .sidebar.open { transform: translateX(0); }
   .mobile-menu { display: block; }
+  .model-picker span { display: none; }
+  .model-picker select { max-width: 145px; }
 }
 .scroll-bottom { position: absolute; left: 50%; bottom: 104px; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--text); box-shadow: var(--shadow); cursor: pointer; display: grid; place-items: center; transform: translateX(-50%); transition: opacity 0.2s ease, transform 0.2s ease; z-index: 5; }
 .scroll-bottom svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; }

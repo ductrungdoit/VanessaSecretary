@@ -17,6 +17,9 @@ Provider options:
 - `openai_base_url`: API base URL ending in `/v1`.
 - `model`: Provider model identifier.
 - `system_prompt`: System instruction sent before conversations.
+- `fallback_model_1`, `fallback_model_2`, and `fallback_model_3`: Optional models tried in order when the primary model fails before streaming starts. Requests containing images prefer `gpt-5.6-sol` when configured.
+
+Conversation history is stored in `/data/vanessa.db` and synchronized between devices using the same add-on and profile. The `/data` directory persists across add-on restarts and upgrades.
 
 Optional search options:
 

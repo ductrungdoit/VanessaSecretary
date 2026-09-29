@@ -34,7 +34,10 @@ Configure at least these values in `.env`:
 OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api.openai.com/v1
 MODEL=gpt-4o-mini
+MODEL_FALLBACKS=gpt-4o,gemini-2.5-flash
 ```
+
+Configure zero to three comma-separated fallback models. The backend tries them in order after network errors, timeouts, rate limits, server errors, or model/request incompatibility responses. Requests with images prefer `gpt-5.6-sol` when it is configured. It cannot switch after streaming has already started.
 
 Open:
 
@@ -88,6 +91,12 @@ MAX_EXTRACTED_CHARS=100000
 ```
 
 Files are parsed in backend memory and are not written to disk. Browser history stores attachment names, not extracted content. Image-only PDF files require OCR, which is not currently included.
+
+## Conversation History
+
+Conversation history is stored in SQLite on the backend and synchronized across browsers that use the same Vanessa server and profile. Local development stores the database at `data/vanessa.db`; the Home Assistant add-on stores it at `/data/vanessa.db`, which persists across restarts and upgrades.
+
+Existing browser history is imported once per profile. Attachment names are stored, but image data and extracted document contents remain in browser memory only.
 
 ## Optional Web Search
 

@@ -6,6 +6,8 @@ const STORAGE_PREFIX = 'vanessa-conversations';
 const API_BASE = `${import.meta.env.BASE_URL}api`;
 const THEME_KEY = 'vanessa-theme';
 const PROFILE_KEY = 'vanessa-profile';
+const MODEL_KEY = 'vanessa-model';
+const MIGRATION_KEY = 'vanessa-history-migrated';
 const PROFILES = ['Vincent', 'Dolly'];
 
 let currentProfile = localStorage.getItem(PROFILE_KEY);
@@ -13,9 +15,23 @@ let conversations = [];
 let activeId = null;
 let isLoading = false;
 let currentModel = '';
+let currentVersion = '';
 let maxFileSizeMb = 10;
 let pendingAttachments = [];
 const messageAttachments = new Map();
+let profileLoadGeneration = 0;
+let activeStream = null;
+
+function conversationIdFromUrl() {
+  return new URL(window.location.href).searchParams.get('conversation');
+}
+
+function setConversationUrl(id, { replace = false } = {}) {
+  const url = new URL(window.location.href);
+  if (id) url.searchParams.set('conversation', id);
+  else url.searchParams.delete('conversation');
+  window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
+}
 
 marked.use({ breaks: true, gfm: true });
 
@@ -36,7 +52,7 @@ document.querySelector('#app').innerHTML = `
     <div class="sidebar-footer"><button class="profile-button" id="profile-button" title="Đổi người dùng"><span class="avatar" id="profile-avatar"></span><span id="profile-name"></span></button><button class="theme-toggle" id="theme-toggle" aria-label="Đổi giao diện"></button></div>
   </aside>
   <main class="chat-area">
-    <header class="chat-header"><div><div class="chat-title" id="chat-title">Cuộc trò chuyện mới</div><small class="app-version" id="app-version">Đang kết nối...</small></div><button class="mobile-menu" id="mobile-menu" aria-label="Mở menu">${icons.menu}</button></header>
+    <header class="chat-header"><div><div class="chat-title" id="chat-title">Cuộc trò chuyện mới</div><small class="app-version" id="app-version">Đang kết nối...</small></div><div class="header-actions"><label class="model-picker"><span>Model</span><select id="model-select" aria-label="Chọn model" disabled><option>Đang tải...</option></select></label><button class="mobile-menu" id="mobile-menu" aria-label="Mở menu">${icons.menu}</button></div></header>
     <section class="messages" id="messages"></section>
     <button class="scroll-bottom hidden" id="scroll-bottom" type="button" aria-label="Cuộn xuống cuối">${icons.arrowDown}</button>
     <form class="composer" id="composer">
@@ -45,23 +61,69 @@ document.querySelector('#app').innerHTML = `
     </form>
   </main>`;
 
-const elements = Object.fromEntries(['sidebar', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['sidebar', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version', 'model-select'].map(id => [id, document.getElementById(id)]));
 
-function storageKey() {
-  return `${STORAGE_PREFIX}:${currentProfile?.toLowerCase()}`;
+function storageKey(profile = currentProfile) {
+  return `${STORAGE_PREFIX}:${profile?.toLowerCase()}`;
 }
 
-function loadProfileData() {
-  conversations = currentProfile ? JSON.parse(localStorage.getItem(storageKey()) || '[]') : [];
-  activeId = conversations[0]?.id || null;
+async function api(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: options.body ? { 'Content-Type': 'application/json', ...options.headers } : options.headers,
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+  return response.status === 204 ? null : response.json();
+}
+
+function parseStoredJson(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
+    return value && typeof value === 'object' ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function loadProfileData(profile = currentProfile) {
+  if (!profile) return { conversations: [], activeId: null };
+  const generation = ++profileLoadGeneration;
+  const localValue = parseStoredJson(storageKey(profile), []);
+  const local = Array.isArray(localValue) ? localValue : [];
+  const migratedValue = parseStoredJson(MIGRATION_KEY, {});
+  const migrated = Array.isArray(migratedValue) ? {} : migratedValue;
+  if (local.length && !migrated[profile]) {
+    await api('/history/import', { method: 'POST', body: JSON.stringify({ profile, conversations: local }) });
+    if (generation !== profileLoadGeneration) return null;
+    migrated[profile] = true;
+    localStorage.setItem(MIGRATION_KEY, JSON.stringify(migrated));
+  }
+  const summaries = await api(`/conversations?profile=${encodeURIComponent(profile)}`);
+  const loadedResults = await Promise.allSettled(summaries.map(async conversation => ({
+    ...conversation,
+    messages: await api(`/conversations/${encodeURIComponent(conversation.id)}/messages?profile=${encodeURIComponent(profile)}`),
+  })));
+  const loaded = loadedResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+  if (generation !== profileLoadGeneration) return null;
+  const requestedId = conversationIdFromUrl();
+  return { conversations: loaded, activeId: loaded.some(item => item.id === requestedId) ? requestedId : null };
 }
 
 function activeConversation() {
   return conversations.find(item => item.id === activeId);
 }
 
+function startNewConversation() {
+  activeId = null;
+  pendingAttachments = [];
+  renderAttachments();
+  setConversationUrl(null);
+  render({ scrollToEnd: true });
+  elements.prompt.focus();
+}
+
 function save() {
-  if (currentProfile) localStorage.setItem(storageKey(), JSON.stringify(conversations));
+  // History is persisted through the API; localStorage is only retained for one-time migration.
 }
 
 function formatTime(value) {
@@ -75,6 +137,15 @@ function renderMarkdown(content) {
   wrapper.querySelectorAll('*').forEach(element => {
     for (const attribute of [...element.attributes]) {
       if (attribute.name.startsWith('on') || attribute.name === 'srcdoc') element.removeAttribute(attribute.name);
+      if (['href', 'src'].includes(attribute.name)) {
+        try {
+          const url = new URL(attribute.value, window.location.origin);
+          const allowed = attribute.name === 'href' ? ['http:', 'https:', 'mailto:'] : ['http:', 'https:'];
+          if (!allowed.includes(url.protocol)) element.removeAttribute(attribute.name);
+        } catch {
+          element.removeAttribute(attribute.name);
+        }
+      }
     }
   });
   wrapper.querySelectorAll('a').forEach(link => {
@@ -198,19 +269,37 @@ function syncMessageNode(node, message) {
     meta.querySelector('.copy-btn')?.remove();
   }
   const failed = message.error || message.content?.startsWith('Không thể kết nối tới mô hình.');
-  if (failed && !meta.querySelector('.retry-message-btn')) {
+  const retryable = failed && !message.attachmentNames?.length;
+  if (retryable && !meta.querySelector('.retry-message-btn')) {
     const retryBtn = document.createElement('button');
     retryBtn.className = 'retry-message-btn';
     retryBtn.dataset.retryMessage = message.id;
     retryBtn.innerHTML = `${icons.retry} Thử lại`;
     meta.append(retryBtn);
-  } else if (!failed) {
+  } else if (!retryable) {
     meta.querySelector('.retry-message-btn')?.remove();
   }
   if (message.attachmentNames?.length && !bubble.querySelector('.message-files')) {
     const files = document.createElement('div');
     files.className = 'message-files';
-    files.textContent = message.attachmentNames.join(', ');
+    const attachments = messageAttachments.get(message.id) || [];
+    const images = attachments.filter(attachment => attachment.imageUrl);
+    if (images.length) {
+      files.classList.add('has-images');
+      for (const image of images) {
+        const thumbnail = document.createElement('img');
+        thumbnail.src = image.imageUrl;
+        thumbnail.alt = image.name;
+        thumbnail.title = image.name;
+        files.append(thumbnail);
+      }
+    }
+    const nonImageNames = message.attachmentNames.filter(name => !images.some(image => image.name === name));
+    if (nonImageNames.length) {
+      const names = document.createElement('span');
+      names.textContent = nonImageNames.join(', ');
+      files.append(names);
+    }
     bubble.prepend(files);
   }
 }
@@ -235,35 +324,44 @@ function escapeHtml(value) {
   return element.innerHTML;
 }
 
-function createConversation() {
+async function createConversation() {
   pendingAttachments = [];
   renderAttachments();
   const conversation = { id: crypto.randomUUID(), title: 'Cuộc trò chuyện mới', messages: [], createdAt: Date.now() };
+  await api('/conversations', { method: 'POST', body: JSON.stringify({ ...conversation, profile: currentProfile }) });
   conversations.unshift(conversation);
   activeId = conversation.id;
-  save();
+  setConversationUrl(conversation.id, { replace: true });
   render();
   elements.prompt.focus();
 }
 
-function selectProfile(profile) {
+async function selectProfile(profile) {
   if (!PROFILES.includes(profile)) return;
+  if (isLoading) return;
+  const loaded = await loadProfileData(profile);
+  if (!loaded) return;
   currentProfile = profile;
+  conversations = loaded.conversations;
+  activeId = loaded.activeId;
+  if (!activeId) setConversationUrl(null, { replace: true });
   pendingAttachments = [];
   renderAttachments();
   localStorage.setItem(PROFILE_KEY, profile);
-  loadProfileData();
   elements['profile-gate'].classList.add('hidden');
   render();
   elements.prompt.focus();
 }
 
-function deleteConversation(id) {
+async function deleteConversation(id) {
   const index = conversations.findIndex(item => item.id === id);
   if (index === -1) return;
+  await api(`/conversations/${encodeURIComponent(id)}?profile=${encodeURIComponent(currentProfile)}`, { method: 'DELETE' });
   conversations.splice(index, 1);
-  if (activeId === id) activeId = conversations[Math.min(index, conversations.length - 1)]?.id || null;
-  save();
+  if (activeId === id) {
+    activeId = null;
+    setConversationUrl(null, { replace: true });
+  }
   render();
 }
 
@@ -271,13 +369,16 @@ function updateThemeIcon() {
   elements['theme-toggle'].innerHTML = document.documentElement.dataset.theme === 'dark' ? icons.sun : icons.moon;
 }
 
-async function streamResponse(messages, assistantMessage, attachments) {
+async function streamResponse(messages, assistantMessage, attachments, streamContext) {
   const requestId = crypto.randomUUID();
   console.info(`[chat:${requestId}] POST ${API_BASE}/chat`, { model: currentModel, messageCount: messages.length, page: window.location.href });
+  const controller = new AbortController();
+  activeStream = { ...streamContext, controller };
   const response = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages: messages.map(({ role, content }) => ({ role, content })), model: currentModel, attachments }),
+    signal: controller.signal,
   });
   console.info(`[chat:${requestId}] response`, { status: response.status, statusText: response.statusText, url: response.url, contentType: response.headers.get('content-type') });
   if (!response.ok) {
@@ -290,36 +391,49 @@ async function streamResponse(messages, assistantMessage, attachments) {
     console.error(`[chat:${requestId}] request failed`, { status: response.status, url: response.url, body: text });
     throw new Error(`HTTP ${response.status}${message ? `: ${message}` : ''}`);
   }
+  const responseModel = response.headers.get('X-Vanessa-Model');
+  if (responseModel) {
+    elements['app-version'].textContent = `${responseModel} · ${currentVersion}`;
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let completed = false;
+  const processLine = line => {
+    const data = line.trim().replace(/^data:\s*/, '');
+    if (!data) return;
+    if (data === '[DONE]') {
+      completed = true;
+      return;
+    }
+    try {
+      const chunk = JSON.parse(data);
+      assistantMessage.rawContent += chunk.choices?.[0]?.delta?.content || '';
+      assistantMessage.content = stripThinking(assistantMessage.rawContent);
+      assistantMessage.pending = !assistantMessage.content;
+      assistantMessage.streaming = Boolean(assistantMessage.content);
+      if (activeStream?.conversationId === streamContext.conversationId && activeId === streamContext.conversationId && currentProfile === streamContext.profile) renderStreamingMessage(assistantMessage);
+    } catch { /* Ignore SSE comments and provider metadata. */ }
+  };
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
-    for (const line of lines) {
-      const data = line.trim().replace(/^data:\s*/, '');
-      if (!data || data === '[DONE]') continue;
-      try {
-        const chunk = JSON.parse(data);
-        assistantMessage.rawContent += chunk.choices?.[0]?.delta?.content || '';
-        assistantMessage.content = stripThinking(assistantMessage.rawContent);
-        assistantMessage.pending = !assistantMessage.content;
-        assistantMessage.streaming = Boolean(assistantMessage.content);
-        renderStreamingMessage(assistantMessage);
-      } catch { /* Ignore SSE comments and incomplete provider events. */ }
-    }
+    for (const line of lines) processLine(line);
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) processLine(buffer);
+  if (!completed) throw new Error('Luồng phản hồi kết thúc trước khi hoàn tất.');
 }
 
 async function submitPrompt(event) {
   event.preventDefault();
   const content = elements.prompt.value.trim();
   if ((!content && !pendingAttachments.some(file => file.content || file.imageUrl)) || isLoading || pendingAttachments.some(file => file.loading)) return;
-  if (!activeConversation()) createConversation();
+  if (!activeConversation()) await createConversation();
   const conversation = activeConversation();
   const attachments = pendingAttachments.filter(file => file.content || file.imageUrl).map(file => ({ name: file.name, content: file.content, imageUrl: file.imageUrl, type: file.type }));
   const attachmentNames = attachments.map(file => file.name);
@@ -328,14 +442,26 @@ async function submitPrompt(event) {
   conversation.messages.push(userMessage);
   if (attachments.length) messageAttachments.set(userMessage.id, attachments);
   const title = content || attachmentNames.join(', ');
-  if (conversation.messages.length === 1) conversation.title = title.slice(0, 42) + (title.length > 42 ? '…' : '');
   const assistantMessage = { id: crypto.randomUUID(), role: 'assistant', content: '', rawContent: '', pending: true, streaming: false, thinkingSeconds: 0, createdAt: Date.now() };
   conversation.messages.push(assistantMessage);
+  const firstTurn = conversation.messages.filter(m => m.role === 'user').length === 1;
+  const nextTitle = firstTurn ? title.slice(0, 42) + (title.length > 42 ? '…' : '') : null;
+  try {
+    await api(`/conversations/${encodeURIComponent(conversation.id)}/turns`, { method: 'POST', body: JSON.stringify({ profile: currentProfile, userMessage, assistantMessage: { ...assistantMessage, content: '' }, title: nextTitle }) });
+  } catch (error) {
+    conversation.messages.splice(-2, 2);
+    messageAttachments.delete(userMessage.id);
+    render();
+    window.alert(`Không thể lưu tin nhắn: ${error.message}`);
+    return;
+  }
+  if (nextTitle) conversation.title = nextTitle;
   elements.prompt.value = '';
   elements.prompt.style.height = 'auto';
   pendingAttachments = [];
   renderAttachments();
   isLoading = true;
+  elements['model-select'].disabled = true;
   elements.send.disabled = true;
   save();
   render({ scrollToEnd: true });
@@ -348,7 +474,7 @@ async function submitPrompt(event) {
   }, 1000);
 
   try {
-    await streamResponse(conversation.messages.slice(0, -1), assistantMessage, attachments);
+    await streamResponse(conversation.messages.slice(0, -1), assistantMessage, attachments, { profile: currentProfile, conversationId: conversation.id });
   } catch (error) {
     assistantMessage.pending = false;
     assistantMessage.error = true;
@@ -360,9 +486,17 @@ async function submitPrompt(event) {
     delete assistantMessage.thinkingSeconds;
     delete assistantMessage.rawContent;
     isLoading = false;
+    elements['model-select'].disabled = false;
     elements.send.disabled = !elements.prompt.value.trim();
-    save();
     render();
+    try {
+      await api(`/messages/${encodeURIComponent(assistantMessage.id)}`, { method: 'PATCH', body: JSON.stringify({ profile: currentProfile, content: assistantMessage.content }) });
+    } catch (error) {
+      assistantMessage.error = true;
+      assistantMessage.syncError = error.message;
+      render();
+    }
+    activeStream = null;
   }
 }
 
@@ -376,6 +510,7 @@ async function retryMessage(messageId) {
   Object.assign(assistantMessage, { content: '', rawContent: '', pending: true, streaming: false, thinkingSeconds: 0 });
   delete assistantMessage.error;
   isLoading = true;
+  elements['model-select'].disabled = true;
   updateSendState();
   render({ scrollToEnd: true });
 
@@ -392,7 +527,7 @@ async function retryMessage(messageId) {
     if (previousUserMessage.attachmentNames?.length && !attachments.length) {
       throw new Error('Nội dung file không còn trong bộ nhớ. Vui lòng đính kèm lại tài liệu rồi gửi lại.');
     }
-    await streamResponse(conversation.messages.slice(0, index), assistantMessage, attachments);
+    await streamResponse(conversation.messages.slice(0, index), assistantMessage, attachments, { profile: currentProfile, conversationId: conversation.id });
   } catch (error) {
     assistantMessage.pending = false;
     assistantMessage.error = true;
@@ -404,9 +539,17 @@ async function retryMessage(messageId) {
     delete assistantMessage.thinkingSeconds;
     delete assistantMessage.rawContent;
     isLoading = false;
+    elements['model-select'].disabled = false;
     updateSendState();
-    save();
     render();
+    try {
+      await api(`/messages/${encodeURIComponent(assistantMessage.id)}`, { method: 'PATCH', body: JSON.stringify({ profile: currentProfile, content: assistantMessage.content }) });
+    } catch (error) {
+      assistantMessage.error = true;
+      assistantMessage.syncError = error.message;
+      render();
+    }
+    activeStream = null;
   }
 }
 
@@ -454,16 +597,22 @@ elements.prompt.addEventListener('keydown', event => {
     elements.composer.requestSubmit();
   }
 });
-elements['new-chat'].addEventListener('click', () => { createConversation(); elements.sidebar.classList.remove('open'); });
-elements['history-list'].addEventListener('click', event => {
+elements['new-chat'].addEventListener('click', async () => {
+  if (isLoading) return;
+  startNewConversation();
+  elements.sidebar.classList.remove('open');
+});
+elements['history-list'].addEventListener('click', async event => {
+  if (isLoading) return;
   const deleteButton = event.target.closest('[data-delete]');
   if (deleteButton) {
-    deleteConversation(deleteButton.dataset.delete);
+    await deleteConversation(deleteButton.dataset.delete);
     return;
   }
   const item = event.target.closest('[data-id]');
   if (!item) return;
   activeId = item.dataset.id;
+  setConversationUrl(activeId);
   pendingAttachments = [];
   renderAttachments();
   elements.sidebar.classList.remove('open');
@@ -488,23 +637,54 @@ elements['theme-toggle'].addEventListener('click', () => {
   updateThemeIcon();
 });
 elements['mobile-menu'].addEventListener('click', () => elements.sidebar.classList.toggle('open'));
+elements['model-select'].addEventListener('change', event => {
+  currentModel = event.target.value;
+  localStorage.setItem(MODEL_KEY, currentModel);
+  elements['app-version'].textContent = `${currentModel} · ${currentVersion}`;
+});
 elements['profile-button'].addEventListener('click', () => elements['profile-gate'].classList.remove('hidden'));
 elements['profile-gate'].addEventListener('click', event => {
   const option = event.target.closest('[data-profile]');
-  if (option) selectProfile(option.dataset.profile);
+  if (option) selectProfile(option.dataset.profile).catch(error => window.alert(`Không thể tải lịch sử: ${error.message}`));
+});
+window.addEventListener('popstate', () => {
+  if (isLoading) return;
+  const requestedId = conversationIdFromUrl();
+  activeId = conversations.some(item => item.id === requestedId) ? requestedId : null;
+  pendingAttachments = [];
+  renderAttachments();
+  render({ scrollToEnd: true, revealAtEnd: true });
 });
 
-fetch(`${API_BASE}/config`).then(response => response.json()).then(config => {
-  currentModel = config.model;
+fetch(`${API_BASE}/config`).then(async response => {
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+  return response.json();
+}).then(config => {
+  const models = Array.isArray(config.models) && config.models.length ? config.models : [config.model];
+  const savedModel = localStorage.getItem(MODEL_KEY);
+  currentModel = models.includes(savedModel) ? savedModel : config.model;
+  currentVersion = config.version;
   maxFileSizeMb = config.maxFileSizeMb;
-  elements['app-version'].textContent = `${config.model} · ${config.version}`;
+  elements['model-select'].replaceChildren(...models.map(model => new Option(model, model)));
+  elements['model-select'].value = currentModel;
+  elements['model-select'].disabled = false;
+  elements['app-version'].textContent = `${currentModel} · ${config.version}`;
   updateSendState();
 }).catch(error => {
   elements['app-version'].textContent = `Backend chưa kết nối · ${error.message}`;
 });
 
-loadProfileData();
-render({ scrollToEnd: true, revealAtEnd: true });
+loadProfileData().then(loaded => {
+  if (loaded) {
+    conversations = loaded.conversations;
+    activeId = loaded.activeId;
+    if (conversationIdFromUrl() && !activeId) setConversationUrl(null, { replace: true });
+  }
+  render({ scrollToEnd: true, revealAtEnd: true });
+}).catch(error => {
+  console.error('History load failed', error);
+  render({ scrollToEnd: true, revealAtEnd: true });
+});
 setupScrollButton();
 elements.prompt.focus();
 

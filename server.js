@@ -10,9 +10,11 @@ import multer from 'multer';
 import path from 'node:path';
 import { PDFParse } from 'pdf-parse';
 import { fileURLToPath } from 'node:url';
+import { addMessage, addTurn, createConversation, deleteConversationForProfile, getConversationForProfile, importConversations, listConversations, listMessages, updateConversationTitleForProfile, updateMessageContent } from './db.js';
 
 const app = express();
 let requestCounter = 0;
+let activeModel = '';
 const port = Number(process.env.PORT) || 3000;
 const basePath = '/chatbot';
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +32,17 @@ const textExtensions = new Set([
   '.hpp', '.cs', '.go', '.rs', '.rb', '.php', '.swift', '.sql', '.sh', '.bash', '.ps1', '.bat', '.cmd', '.ini', '.toml',
   '.env', '.log', '.conf', '.properties', '.gradle', '.dockerfile', '.gitignore', '.graphql', '.gql', '.r', '.lua', '.tex',
 ]);
+
+function configuredModels() {
+  const models = [process.env.MODEL || 'gpt-4o-mini', ...(process.env.MODEL_FALLBACKS || '').split(',')]
+    .map(model => model.trim())
+    .filter(Boolean);
+  return [...new Set(models)].slice(0, 4);
+}
+
+function shouldTryNextModel(status) {
+  return [400, 404, 408, 409, 422, 429].includes(status) || status >= 500;
+}
 
 function log(level, message) {
   const line = `${new Date().toISOString()} [${level}] ${message}`;
@@ -238,11 +251,98 @@ app.use(compression());
 app.use(express.json({ limit: `${Math.ceil(maxFileBytes * 5 * 4 / 3 / 1024 / 1024) + 2}mb` }));
 
 app.get(`${basePath}/api/health`, (_req, res) => {
-  res.json({ status: 'ok', model: process.env.MODEL || 'gpt-4o-mini' });
+  res.json({ status: 'ok', model: activeModel || configuredModels()[0], models: configuredModels() });
 });
 
 app.get(`${basePath}/api/config`, (_req, res) => {
-  res.json({ model: process.env.MODEL || 'gpt-4o-mini', version: '2026.09.29-1', maxFileSizeMb: maxFileBytes / 1024 / 1024 });
+  res.json({ model: activeModel || configuredModels()[0], models: configuredModels(), version: '2026.09.29-1', maxFileSizeMb: maxFileBytes / 1024 / 1024 });
+});
+
+function validProfile(value) {
+  return typeof value === 'string' && ['vincent', 'dolly'].includes(value.toLowerCase());
+}
+
+function validId(value) {
+  return typeof value === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(value);
+}
+
+function requestProfile(req) {
+  return req.query.profile || req.body?.profile;
+}
+
+app.get(`${basePath}/api/conversations`, (req, res) => {
+  if (!validProfile(req.query.profile)) return res.status(400).json({ error: 'Invalid profile.' });
+  res.json(listConversations(req.query.profile));
+});
+
+app.post(`${basePath}/api/conversations`, (req, res) => {
+  const { id, profile, title, createdAt } = req.body ?? {};
+  if (!validId(id) || !validProfile(profile) || (title != null && typeof title !== 'string')) return res.status(400).json({ error: 'Valid id, profile, and title are required.' });
+  try {
+    res.status(201).json(createConversation({ id, profile, title, createdAt }));
+  } catch (error) {
+    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return res.status(409).json({ error: 'Conversation already exists.' });
+    throw error;
+  }
+});
+
+app.patch(`${basePath}/api/conversations/:id`, (req, res) => {
+  if (!validProfile(req.body?.profile) || typeof req.body?.title !== 'string') return res.status(400).json({ error: 'Profile and title are required.' });
+  if (!updateConversationTitleForProfile(req.params.id, req.body.profile, req.body.title.slice(0, 200))) return res.status(404).json({ error: 'Conversation not found.' });
+  res.status(204).end();
+});
+
+app.delete(`${basePath}/api/conversations/:id`, (req, res) => {
+  const profile = requestProfile(req);
+  if (!validProfile(profile)) return res.status(400).json({ error: 'Profile is required.' });
+  if (!deleteConversationForProfile(req.params.id, profile)) return res.status(404).json({ error: 'Conversation not found.' });
+  res.status(204).end();
+});
+
+app.get(`${basePath}/api/conversations/:id/messages`, (req, res) => {
+  if (!validProfile(req.query.profile)) return res.status(400).json({ error: 'Profile is required.' });
+  if (!getConversationForProfile(req.params.id, req.query.profile)) return res.status(404).json({ error: 'Conversation not found.' });
+  res.json(listMessages(req.params.id));
+});
+
+app.post(`${basePath}/api/conversations/:id/messages`, (req, res) => {
+  const { id, profile, role, content, attachmentNames, createdAt } = req.body ?? {};
+  if (!validProfile(profile)) return res.status(400).json({ error: 'Profile is required.' });
+  if (!getConversationForProfile(req.params.id, profile)) return res.status(404).json({ error: 'Conversation not found.' });
+  if (!validId(id) || !['user', 'assistant'].includes(role) || typeof content !== 'string' || content.length > 1000000) return res.status(400).json({ error: 'Valid message is required.' });
+  try {
+    res.status(201).json(addMessage({ id, conversationId: req.params.id, role, content, attachmentNames, createdAt }));
+  } catch (error) {
+    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return res.status(409).json({ error: 'Message already exists.' });
+    throw error;
+  }
+});
+
+app.post(`${basePath}/api/conversations/:id/turns`, (req, res) => {
+  const { profile, userMessage, assistantMessage, title } = req.body ?? {};
+  if (!validProfile(profile) || !validId(userMessage?.id) || !validId(assistantMessage?.id) || typeof userMessage?.content !== 'string' || userMessage.content.length > 1000000 || (title != null && typeof title !== 'string')) {
+    return res.status(400).json({ error: 'Valid profile and messages are required.' });
+  }
+  try {
+    if (!addTurn({ conversationId: req.params.id, profile, userMessage, assistantMessage, title: title?.slice(0, 200) })) return res.status(404).json({ error: 'Conversation not found.' });
+    res.status(201).json({ userMessage, assistantMessage });
+  } catch (error) {
+    if (error.code?.startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ error: 'Turn already exists.' });
+    throw error;
+  }
+});
+
+app.patch(`${basePath}/api/messages/:id`, (req, res) => {
+  if (!validProfile(req.body?.profile) || typeof req.body?.content !== 'string' || req.body.content.length > 1000000) return res.status(400).json({ error: 'Profile and content are required.' });
+  if (!updateMessageContent(req.params.id, req.body.content, req.body.profile)) return res.status(404).json({ error: 'Message not found.' });
+  res.status(204).end();
+});
+
+app.post(`${basePath}/api/history/import`, (req, res) => {
+  const { profile, conversations } = req.body ?? {};
+  if (!validProfile(profile) || !Array.isArray(conversations)) return res.status(400).json({ error: 'Valid profile and conversations are required.' });
+  importConversations(profile, conversations.slice(0, 1000));
+  res.status(204).end();
 });
 
 app.post(`${basePath}/api/files/extract`, upload.single('file'), async (req, res) => {
@@ -265,7 +365,7 @@ app.post(`${basePath}/api/files/extract`, upload.single('file'), async (req, res
 app.post(`${basePath}/api/chat`, async (req, res) => {
   const requestId = `req-${Date.now()}-${++requestCounter}`;
   log('INFO', `[${requestId}] POST /api/chat model=${req.body?.model || 'unknown'} messages=${Array.isArray(req.body?.messages) ? req.body.messages.length : 0}`);
-  const { messages, temperature = 0.7, attachments = [] } = req.body ?? {};
+  const { messages, model: requestedModel, temperature = 0.7, attachments = [] } = req.body ?? {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Messages are required.' });
   }
@@ -334,33 +434,59 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
     }
 
     const upstreamUrl = `${baseUrl}/chat/completions`;
-    log('INFO', `[${requestId}] Upstream URL: ${upstreamUrl}`);
-    const upstream = await fetch(upstreamUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.MODEL || 'gpt-4o-mini',
-        messages: payloadMessages,
-        temperature: Math.min(2, Math.max(0, Number(temperature))),
-        stream: true,
-      }),
-      signal: AbortSignal.timeout(120000),
-    });
-
-    if (!upstream.ok) {
-      const details = await upstream.text();
-      log('ERROR', `[${requestId}] Upstream API error ${upstream.status}: ${details}`);
-      return res.status(upstream.status).json({ error: details || 'Upstream API error.' });
+    const configured = configuredModels();
+    const hasImages = Array.isArray(attachments) && attachments.some(attachment => typeof attachment?.imageUrl === 'string');
+    const preferredModel = hasImages && configured.includes('gpt-5.6-sol') ? 'gpt-5.6-sol' : requestedModel;
+    const models = configured.includes(preferredModel)
+      ? [preferredModel, ...configured.filter(model => model !== preferredModel)]
+      : configured;
+    let upstream;
+    let selectedModel;
+    let lastError;
+    log('INFO', `[${requestId}] Upstream URL: ${upstreamUrl} models=${models.join(',')}`);
+    for (const [index, model] of models.entries()) {
+      try {
+        upstream = await fetch(upstreamUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: payloadMessages,
+            temperature: Math.min(2, Math.max(0, Number(temperature))),
+            stream: true,
+          }),
+          signal: AbortSignal.timeout(120000),
+        });
+        if (upstream.ok) {
+          selectedModel = model;
+          break;
+        }
+        const details = await upstream.text();
+        lastError = { status: upstream.status, details };
+        log('ERROR', `[${requestId}] Model ${model} failed HTTP ${upstream.status}: ${details}`);
+        if (!shouldTryNextModel(upstream.status) || index === models.length - 1) break;
+      } catch (error) {
+        lastError = { status: error.name === 'TimeoutError' ? 504 : 502, details: error.message };
+        log('ERROR', `[${requestId}] Model ${model} request failed: ${error.message}`);
+        if (index === models.length - 1) break;
+      }
     }
+
+    if (!selectedModel) {
+      return res.status(lastError?.status || 502).json({ error: lastError?.details || 'All configured models failed.' });
+    }
+    activeModel = selectedModel;
+    if (selectedModel !== models[0]) log('INFO', `[${requestId}] Failover selected model=${selectedModel}`);
 
     log('INFO', `[${requestId}] Streaming response started`);
     res.status(200);
     res.setHeader('Content-Type', upstream.headers.get('content-type') || 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Vanessa-Model', selectedModel);
 
     const reader = upstream.body.getReader();
     req.on('close', () => reader.cancel().catch(() => {}));

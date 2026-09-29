@@ -19,6 +19,9 @@ options:
   openai_api_key: ""
   openai_base_url: https://api.openai.com/v1
   model: gpt-4o-mini
+  fallback_model_1: ""
+  fallback_model_2: ""
+  fallback_model_3: ""
   system_prompt: You are a helpful, accurate, and concise AI assistant.
   search_provider: google
   google_search_api_key: ""
@@ -32,6 +35,9 @@ schema:
   openai_api_key: password
   openai_base_url: url
   model: str
+  fallback_model_1: str?
+  fallback_model_2: str?
+  fallback_model_3: str?
   system_prompt: str
   search_provider: list(google|brave)
   google_search_api_key: password?
