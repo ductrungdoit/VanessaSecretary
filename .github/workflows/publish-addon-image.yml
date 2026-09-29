@@ -47,5 +47,5 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ghcr.io/ductrungdoit/vanessa-secretary-${{ matrix.arch }}:1.0.3
+            ghcr.io/ductrungdoit/vanessa-secretary-${{ matrix.arch }}:1.0.4
             ghcr.io/ductrungdoit/vanessa-secretary-${{ matrix.arch }}:latest
