@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import compression from 'compression';
 import cors from 'cors';
+import crypto from 'node:crypto';
 import ExcelJS from 'exceljs';
 import express from 'express';
 import fs from 'node:fs';
@@ -21,6 +22,10 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const logFile = path.join(root, 'server.log');
 const maxFileBytes = Math.min(25, Math.max(1, Number(process.env.MAX_FILE_SIZE_MB) || 10)) * 1024 * 1024;
 const maxExtractedChars = Math.min(500000, Math.max(1000, Number(process.env.MAX_EXTRACTED_CHARS) || 100000));
+const accessPassword = process.env.ACCESS_PASSWORD || '';
+const authCookie = 'vanessa_auth';
+const authMaxAgeSeconds = 365 * 24 * 60 * 60;
+const loginAttempts = new Map();
 const supportedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -38,6 +43,42 @@ function configuredModels() {
     .map(model => model.trim())
     .filter(Boolean);
   return [...new Set(models)].slice(0, 4);
+}
+
+function safeEqual(left, right) {
+  const leftHash = crypto.createHash('sha256').update(String(left)).digest();
+  const rightHash = crypto.createHash('sha256').update(String(right)).digest();
+  return crypto.timingSafeEqual(leftHash, rightHash);
+}
+
+function createAuthToken(expiresAt = Date.now() + authMaxAgeSeconds * 1000) {
+  const payload = String(expiresAt);
+  const signature = crypto.createHmac('sha256', accessPassword).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function isAuthenticated(req) {
+  if (!accessPassword) return true;
+  const cookie = (req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${authCookie}=`));
+  if (!cookie) return false;
+  const token = decodeURIComponent(cookie.slice(authCookie.length + 1));
+  const separator = token.indexOf('.');
+  if (separator < 1) return false;
+  const expiresAt = token.slice(0, separator);
+  const signature = token.slice(separator + 1);
+  if (!/^\d+$/.test(expiresAt) || Number(expiresAt) <= Date.now()) return false;
+  const expected = crypto.createHmac('sha256', accessPassword).update(expiresAt).digest('base64url');
+  return safeEqual(signature, expected);
+}
+
+function recordFailedLogin(req) {
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const recent = (loginAttempts.get(key) || []).filter(timestamp => now - timestamp < 15 * 60 * 1000);
+  if (recent.length >= 10) return true;
+  recent.push(now);
+  loginAttempts.set(key, recent);
+  return false;
 }
 
 function shouldTryNextModel(status) {
@@ -254,6 +295,27 @@ app.get(`${basePath}/api/health`, (_req, res) => {
   res.json({ status: 'ok', model: activeModel || configuredModels()[0], models: configuredModels() });
 });
 
+app.get(`${basePath}/api/auth`, (req, res) => {
+  res.json({ required: Boolean(accessPassword), authenticated: isAuthenticated(req) });
+});
+
+app.post(`${basePath}/api/auth`, (req, res) => {
+  if (!accessPassword) return res.status(204).end();
+  if (typeof req.body?.password !== 'string' || !safeEqual(req.body.password, accessPassword)) {
+    if (recordFailedLogin(req)) return res.status(429).json({ error: 'Quá nhiều lần thử. Vui lòng thử lại sau.' });
+    return res.status(401).json({ error: 'Sai mật khẩu, vui lòng liên hệ anh Đức Trung đẹp trai để được sử dụng' });
+  }
+  loginAttempts.delete(req.ip || req.socket.remoteAddress || 'unknown');
+  const secure = req.secure || req.get('x-forwarded-proto') === 'https';
+  res.cookie(authCookie, createAuthToken(), { httpOnly: true, sameSite: 'strict', secure, maxAge: authMaxAgeSeconds * 1000, path: `${basePath}/` });
+  res.status(204).end();
+});
+
+app.use(`${basePath}/api`, (req, res, next) => {
+  if (isAuthenticated(req)) return next();
+  res.status(401).json({ error: 'Vui lòng nhập mật khẩu để tiếp tục.' });
+});
+
 app.get(`${basePath}/api/config`, (_req, res) => {
   res.json({ model: activeModel || configuredModels()[0], models: configuredModels(), version: '2026.09.29-1', maxFileSizeMb: maxFileBytes / 1024 / 1024 });
 });
@@ -271,49 +333,49 @@ function requestProfile(req) {
 }
 
 app.get(`${basePath}/api/conversations`, (req, res) => {
-  if (!validProfile(req.query.profile)) return res.status(400).json({ error: 'Invalid profile.' });
+  if (!validProfile(req.query.profile)) return res.status(400).json({ error: 'Người dùng không hợp lệ.' });
   res.json(listConversations(req.query.profile));
 });
 
 app.post(`${basePath}/api/conversations`, (req, res) => {
   const { id, profile, title, createdAt } = req.body ?? {};
-  if (!validId(id) || !validProfile(profile) || (title != null && typeof title !== 'string')) return res.status(400).json({ error: 'Valid id, profile, and title are required.' });
+  if (!validId(id) || !validProfile(profile) || (title != null && typeof title !== 'string')) return res.status(400).json({ error: 'Thông tin cuộc trò chuyện không hợp lệ.' });
   try {
     res.status(201).json(createConversation({ id, profile, title, createdAt }));
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return res.status(409).json({ error: 'Conversation already exists.' });
+    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return res.status(409).json({ error: 'Cuộc trò chuyện này đã tồn tại.' });
     throw error;
   }
 });
 
 app.patch(`${basePath}/api/conversations/:id`, (req, res) => {
-  if (!validProfile(req.body?.profile) || typeof req.body?.title !== 'string') return res.status(400).json({ error: 'Profile and title are required.' });
-  if (!updateConversationTitleForProfile(req.params.id, req.body.profile, req.body.title.slice(0, 200))) return res.status(404).json({ error: 'Conversation not found.' });
+  if (!validProfile(req.body?.profile) || typeof req.body?.title !== 'string') return res.status(400).json({ error: 'Thông tin tiêu đề không hợp lệ.' });
+  if (!updateConversationTitleForProfile(req.params.id, req.body.profile, req.body.title.slice(0, 200))) return res.status(404).json({ error: 'Không tìm thấy cuộc trò chuyện này.' });
   res.status(204).end();
 });
 
 app.delete(`${basePath}/api/conversations/:id`, (req, res) => {
   const profile = requestProfile(req);
-  if (!validProfile(profile)) return res.status(400).json({ error: 'Profile is required.' });
-  if (!deleteConversationForProfile(req.params.id, profile)) return res.status(404).json({ error: 'Conversation not found.' });
+  if (!validProfile(profile)) return res.status(400).json({ error: 'Người dùng không hợp lệ.' });
+  if (!deleteConversationForProfile(req.params.id, profile)) return res.status(404).json({ error: 'Không tìm thấy cuộc trò chuyện này.' });
   res.status(204).end();
 });
 
 app.get(`${basePath}/api/conversations/:id/messages`, (req, res) => {
-  if (!validProfile(req.query.profile)) return res.status(400).json({ error: 'Profile is required.' });
-  if (!getConversationForProfile(req.params.id, req.query.profile)) return res.status(404).json({ error: 'Conversation not found.' });
+  if (!validProfile(req.query.profile)) return res.status(400).json({ error: 'Người dùng không hợp lệ.' });
+  if (!getConversationForProfile(req.params.id, req.query.profile)) return res.status(404).json({ error: 'Không tìm thấy cuộc trò chuyện này.' });
   res.json(listMessages(req.params.id));
 });
 
 app.post(`${basePath}/api/conversations/:id/messages`, (req, res) => {
   const { id, profile, role, content, attachmentNames, createdAt } = req.body ?? {};
-  if (!validProfile(profile)) return res.status(400).json({ error: 'Profile is required.' });
-  if (!getConversationForProfile(req.params.id, profile)) return res.status(404).json({ error: 'Conversation not found.' });
-  if (!validId(id) || !['user', 'assistant'].includes(role) || typeof content !== 'string' || content.length > 1000000) return res.status(400).json({ error: 'Valid message is required.' });
+  if (!validProfile(profile)) return res.status(400).json({ error: 'Người dùng không hợp lệ.' });
+  if (!getConversationForProfile(req.params.id, profile)) return res.status(404).json({ error: 'Không tìm thấy cuộc trò chuyện này.' });
+  if (!validId(id) || !['user', 'assistant'].includes(role) || typeof content !== 'string' || content.length > 1000000) return res.status(400).json({ error: 'Nội dung tin nhắn không hợp lệ.' });
   try {
     res.status(201).json(addMessage({ id, conversationId: req.params.id, role, content, attachmentNames, createdAt }));
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return res.status(409).json({ error: 'Message already exists.' });
+    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return res.status(409).json({ error: 'Tin nhắn này đã tồn tại.' });
     throw error;
   }
 });
@@ -321,32 +383,32 @@ app.post(`${basePath}/api/conversations/:id/messages`, (req, res) => {
 app.post(`${basePath}/api/conversations/:id/turns`, (req, res) => {
   const { profile, userMessage, assistantMessage, title } = req.body ?? {};
   if (!validProfile(profile) || !validId(userMessage?.id) || !validId(assistantMessage?.id) || typeof userMessage?.content !== 'string' || userMessage.content.length > 1000000 || (title != null && typeof title !== 'string')) {
-    return res.status(400).json({ error: 'Valid profile and messages are required.' });
+    return res.status(400).json({ error: 'Thông tin người dùng hoặc tin nhắn không hợp lệ.' });
   }
   try {
-    if (!addTurn({ conversationId: req.params.id, profile, userMessage, assistantMessage, title: title?.slice(0, 200) })) return res.status(404).json({ error: 'Conversation not found.' });
+    if (!addTurn({ conversationId: req.params.id, profile, userMessage, assistantMessage, title: title?.slice(0, 200) })) return res.status(404).json({ error: 'Không tìm thấy cuộc trò chuyện này.' });
     res.status(201).json({ userMessage, assistantMessage });
   } catch (error) {
-    if (error.code?.startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ error: 'Turn already exists.' });
+    if (error.code?.startsWith('SQLITE_CONSTRAINT')) return res.status(409).json({ error: 'Lượt trò chuyện này đã được lưu.' });
     throw error;
   }
 });
 
 app.patch(`${basePath}/api/messages/:id`, (req, res) => {
-  if (!validProfile(req.body?.profile) || typeof req.body?.content !== 'string' || req.body.content.length > 1000000) return res.status(400).json({ error: 'Profile and content are required.' });
-  if (!updateMessageContent(req.params.id, req.body.content, req.body.profile)) return res.status(404).json({ error: 'Message not found.' });
+  if (!validProfile(req.body?.profile) || typeof req.body?.content !== 'string' || req.body.content.length > 1000000) return res.status(400).json({ error: 'Thông tin tin nhắn không hợp lệ.' });
+  if (!updateMessageContent(req.params.id, req.body.content, req.body.profile)) return res.status(404).json({ error: 'Không tìm thấy tin nhắn này.' });
   res.status(204).end();
 });
 
 app.post(`${basePath}/api/history/import`, (req, res) => {
   const { profile, conversations } = req.body ?? {};
-  if (!validProfile(profile) || !Array.isArray(conversations)) return res.status(400).json({ error: 'Valid profile and conversations are required.' });
+  if (!validProfile(profile) || !Array.isArray(conversations)) return res.status(400).json({ error: 'Dữ liệu lịch sử trò chuyện không hợp lệ.' });
   importConversations(profile, conversations.slice(0, 1000));
   res.status(204).end();
 });
 
 app.post(`${basePath}/api/files/extract`, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'File is required.' });
+  if (!req.file) return res.status(400).json({ error: 'Vui lòng chọn tệp cần tải lên.' });
   try {
     const extracted = cleanExtractedText(await extractFile(req.file));
     if (!extracted.text) return res.status(422).json({ error: 'Không tìm thấy nội dung văn bản trong file.' });
@@ -367,7 +429,7 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
   log('INFO', `[${requestId}] POST /api/chat model=${req.body?.model || 'unknown'} messages=${Array.isArray(req.body?.messages) ? req.body.messages.length : 0}`);
   const { messages, model: requestedModel, temperature = 0.7, attachments = [] } = req.body ?? {};
   if (!Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: 'Messages are required.' });
+    return res.status(400).json({ error: 'Vui lòng nhập nội dung tin nhắn.' });
   }
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).json({ error: 'Server chưa được cấu hình OPENAI_API_KEY.' });
@@ -476,7 +538,7 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
     }
 
     if (!selectedModel) {
-      return res.status(lastError?.status || 502).json({ error: lastError?.details || 'All configured models failed.' });
+      return res.status(lastError?.status || 502).json({ error: 'Các mô hình hiện không thể phản hồi. Vui lòng thử lại sau.' });
     }
     activeModel = selectedModel;
     if (selectedModel !== models[0]) log('INFO', `[${requestId}] Failover selected model=${selectedModel}`);
@@ -500,7 +562,7 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
     const cause = error.cause ? ` cause=${error.cause.code || error.cause.message || String(error.cause)}` : '';
     log('ERROR', `[${requestId}] Proxy error: ${error.stack || error.message}${cause}`);
     if (!res.headersSent) {
-      res.status(502).json({ error: error.name === 'TimeoutError' ? 'API timeout.' : error.message });
+      res.status(502).json({ error: error.name === 'TimeoutError' ? 'Mô hình phản hồi quá lâu. Vui lòng thử lại.' : 'Không thể kết nối tới mô hình. Vui lòng thử lại sau.' });
     } else {
       res.end();
     }
@@ -509,9 +571,9 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
 
 app.use((error, _req, res, next) => {
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: `File vượt quá giới hạn ${maxFileBytes / 1024 / 1024} MB.` });
+    return res.status(413).json({ error: `Tệp vượt quá dung lượng cho phép (${maxFileBytes / 1024 / 1024} MB).` });
   }
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return res.status(500).json({ error: 'Đã có lỗi xảy ra. Vui lòng thử lại sau.' });
   next();
 });
 

@@ -96,6 +96,8 @@ Files are parsed in backend memory and are not written to disk. Browser history 
 
 Conversation history is stored in SQLite on the backend and synchronized across browsers that use the same Vanessa server and profile. Local development stores the database at `data/vanessa.db`; the Home Assistant add-on stores it at `/data/vanessa.db`, which persists across restarts and upgrades.
 
+Set `ACCESS_PASSWORD` to protect the application. Each browser enters the password once and receives a one-year `HttpOnly` authentication cookie. Changing the password invalidates existing browser sessions.
+
 Existing browser history is imported once per profile. Attachment names are stored, but image data and extracted document contents remain in browser memory only.
 
 ## Optional Web Search

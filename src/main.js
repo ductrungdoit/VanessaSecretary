@@ -37,6 +37,16 @@ marked.use({ breaks: true, gfm: true });
 
 document.documentElement.dataset.theme = localStorage.getItem(THEME_KEY) || 'light';
 document.querySelector('#app').innerHTML = `
+  <div class="profile-gate" id="auth-gate">
+    <form class="profile-card auth-card" id="auth-form">
+      <div class="profile-mark">${icons.secretary}</div>
+      <h1>Vanessa The Secretary</h1>
+      <p>Nhập mật khẩu để tiếp tục.</p>
+      <input class="auth-input" id="auth-password" type="password" autocomplete="current-password" placeholder="Mật khẩu" required>
+      <p class="auth-error hidden" id="auth-error"></p>
+      <button class="auth-submit" id="auth-submit" type="submit">Mở Vanessa</button>
+    </form>
+  </div>
   <div class="profile-gate ${currentProfile ? 'hidden' : ''}" id="profile-gate">
     <div class="profile-card">
       <div class="profile-mark">${icons.secretary}</div>
@@ -61,7 +71,7 @@ document.querySelector('#app').innerHTML = `
     </form>
   </main>`;
 
-const elements = Object.fromEntries(['sidebar', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version', 'model-select'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['sidebar', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version', 'model-select', 'auth-gate', 'auth-form', 'auth-password', 'auth-error', 'auth-submit'].map(id => [id, document.getElementById(id)]));
 
 function storageKey(profile = currentProfile) {
   return `${STORAGE_PREFIX}:${profile?.toLowerCase()}`;
@@ -72,8 +82,25 @@ async function api(path, options = {}) {
     ...options,
     headers: options.body ? { 'Content-Type': 'application/json', ...options.headers } : options.headers,
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+  if (!response.ok) throw new Error(await responseError(response));
   return response.status === 204 ? null : response.json();
+}
+
+async function responseError(response) {
+  const fallback = {
+    400: 'Thông tin gửi lên chưa hợp lệ. Vui lòng kiểm tra và thử lại.',
+    401: 'Phiên truy cập không hợp lệ. Vui lòng nhập lại mật khẩu.',
+    404: 'Không tìm thấy dữ liệu yêu cầu. Nội dung có thể đã bị xóa.',
+    409: 'Dữ liệu đã tồn tại hoặc vừa được thay đổi. Vui lòng tải lại trang.',
+    413: 'Tệp tải lên vượt quá dung lượng cho phép.',
+    429: 'Bạn thao tác quá nhiều lần. Vui lòng chờ một lát rồi thử lại.',
+  }[response.status] || (response.status >= 500 ? 'Máy chủ đang gặp sự cố. Vui lòng thử lại sau.' : 'Không thể hoàn thành yêu cầu. Vui lòng thử lại.');
+  try {
+    const body = await response.json();
+    return body.error?.message || body.error || body.message || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function parseStoredJson(key, fallback) {
@@ -382,14 +409,9 @@ async function streamResponse(messages, assistantMessage, attachments, streamCon
   });
   console.info(`[chat:${requestId}] response`, { status: response.status, statusText: response.statusText, url: response.url, contentType: response.headers.get('content-type') });
   if (!response.ok) {
-    const text = await response.text();
-    let message = text;
-    try {
-      const body = JSON.parse(text);
-      message = body.error?.message || body.error || body.message || text;
-    } catch { /* Keep the original response body. */ }
-    console.error(`[chat:${requestId}] request failed`, { status: response.status, url: response.url, body: text });
-    throw new Error(`HTTP ${response.status}${message ? `: ${message}` : ''}`);
+    const message = await responseError(response);
+    console.error(`[chat:${requestId}] request failed`, { status: response.status, url: response.url, message });
+    throw new Error(message);
   }
   const responseModel = response.headers.get('X-Vanessa-Model');
   if (responseModel) {
@@ -452,7 +474,7 @@ async function submitPrompt(event) {
     conversation.messages.splice(-2, 2);
     messageAttachments.delete(userMessage.id);
     render();
-    window.alert(`Không thể lưu tin nhắn: ${error.message}`);
+    window.alert(`Không thể lưu tin nhắn. ${error.message}`);
     return;
   }
   if (nextTitle) conversation.title = nextTitle;
@@ -478,7 +500,7 @@ async function submitPrompt(event) {
   } catch (error) {
     assistantMessage.pending = false;
     assistantMessage.error = true;
-    assistantMessage.content = `Không thể kết nối tới mô hình.\n\n**Chi tiết:** ${error.message}`;
+    assistantMessage.content = `Không thể nhận phản hồi.\n\n**Chi tiết:** ${error.message}`;
   } finally {
     window.clearInterval(thinkingTimer);
     assistantMessage.pending = false;
@@ -531,7 +553,7 @@ async function retryMessage(messageId) {
   } catch (error) {
     assistantMessage.pending = false;
     assistantMessage.error = true;
-    assistantMessage.content = `Không thể kết nối tới mô hình.\n\n**Chi tiết:** ${error.message}`;
+    assistantMessage.content = `Không thể nhận phản hồi.\n\n**Chi tiết:** ${error.message}`;
   } finally {
     window.clearInterval(thinkingTimer);
     assistantMessage.pending = false;
@@ -645,7 +667,7 @@ elements['model-select'].addEventListener('change', event => {
 elements['profile-button'].addEventListener('click', () => elements['profile-gate'].classList.remove('hidden'));
 elements['profile-gate'].addEventListener('click', event => {
   const option = event.target.closest('[data-profile]');
-  if (option) selectProfile(option.dataset.profile).catch(error => window.alert(`Không thể tải lịch sử: ${error.message}`));
+  if (option) selectProfile(option.dataset.profile).catch(error => window.alert(`Không thể tải lịch sử trò chuyện. ${error.message}`));
 });
 window.addEventListener('popstate', () => {
   if (isLoading) return;
@@ -656,10 +678,10 @@ window.addEventListener('popstate', () => {
   render({ scrollToEnd: true, revealAtEnd: true });
 });
 
-fetch(`${API_BASE}/config`).then(async response => {
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-  return response.json();
-}).then(config => {
+async function initializeApp() {
+  const response = await fetch(`${API_BASE}/config`);
+  if (!response.ok) throw new Error(await responseError(response));
+  const config = await response.json();
   const models = Array.isArray(config.models) && config.models.length ? config.models : [config.model];
   const savedModel = localStorage.getItem(MODEL_KEY);
   currentModel = models.includes(savedModel) ? savedModel : config.model;
@@ -670,23 +692,56 @@ fetch(`${API_BASE}/config`).then(async response => {
   elements['model-select'].disabled = false;
   elements['app-version'].textContent = `${currentModel} · ${config.version}`;
   updateSendState();
-}).catch(error => {
-  elements['app-version'].textContent = `Backend chưa kết nối · ${error.message}`;
-});
-
-loadProfileData().then(loaded => {
+  const loaded = await loadProfileData();
   if (loaded) {
     conversations = loaded.conversations;
     activeId = loaded.activeId;
     if (conversationIdFromUrl() && !activeId) setConversationUrl(null, { replace: true });
   }
   render({ scrollToEnd: true, revealAtEnd: true });
-}).catch(error => {
-  console.error('History load failed', error);
-  render({ scrollToEnd: true, revealAtEnd: true });
+  elements['auth-gate'].classList.add('hidden');
+  elements.prompt.focus();
+}
+
+async function checkAuthentication() {
+  try {
+    const response = await fetch(`${API_BASE}/auth`);
+    if (!response.ok) throw new Error(await responseError(response));
+    const auth = await response.json();
+    if (!auth.required || auth.authenticated) return initializeApp();
+    elements['auth-password'].focus();
+  } catch (error) {
+    elements['auth-error'].textContent = `Không thể kết nối với Vanessa. ${error.message}`;
+    elements['auth-error'].classList.remove('hidden');
+  }
+}
+
+elements['auth-form'].addEventListener('submit', async event => {
+  event.preventDefault();
+  elements['auth-submit'].disabled = true;
+  elements['auth-error'].classList.add('hidden');
+  try {
+    const response = await fetch(`${API_BASE}/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: elements['auth-password'].value }),
+    });
+    if (!response.ok) {
+      throw new Error(await responseError(response));
+    }
+    elements['auth-password'].value = '';
+    await initializeApp();
+  } catch (error) {
+    elements['auth-error'].textContent = error.message;
+    elements['auth-error'].classList.remove('hidden');
+    elements['auth-password'].select();
+  } finally {
+    elements['auth-submit'].disabled = false;
+  }
 });
+
+checkAuthentication();
 setupScrollButton();
-elements.prompt.focus();
 
 async function uploadAttachment(file) {
   const attachment = { name: file.name, type: file.type, file, loading: true, error: '' };
@@ -729,8 +784,8 @@ async function extractAttachment(attachment) {
   formData.append('file', attachment.file);
   try {
     const response = await fetch(`${API_BASE}/files/extract`, { method: 'POST', body: formData });
+    if (!response.ok) throw new Error(await responseError(response));
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     Object.assign(attachment, { content: result.text, loading: false, truncated: result.truncated });
   } catch (error) {
     Object.assign(attachment, { loading: false, error: error.message });

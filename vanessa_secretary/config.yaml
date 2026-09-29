@@ -19,6 +19,7 @@ options:
   openai_api_key: ""
   openai_base_url: https://api.openai.com/v1
   model: gpt-4o-mini
+  access_password: ""
   fallback_model_1: ""
   fallback_model_2: ""
   fallback_model_3: ""
@@ -35,6 +36,7 @@ schema:
   openai_api_key: password
   openai_base_url: url
   model: str
+  access_password: password
   fallback_model_1: str?
   fallback_model_2: str?
   fallback_model_3: str?

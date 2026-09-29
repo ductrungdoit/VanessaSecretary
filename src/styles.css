@@ -157,6 +157,14 @@ textarea {
 .profile-mark svg { width: 28px; height: 28px; stroke: currentColor; fill: none; stroke-width: 1.8; }
 .profile-card h1 { margin: 0 0 8px; font-size: 1.6rem; letter-spacing: -0.03em; }
 .profile-card p { margin: 0 0 24px; color: var(--muted); line-height: 1.5; }
+.auth-card { display: flex; flex-direction: column; align-items: stretch; }
+.auth-card .profile-mark { align-self: center; }
+.auth-input { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); color: var(--text); padding: 14px 16px; font: inherit; outline: none; }
+.auth-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.auth-submit { margin-top: 12px; border: 0; border-radius: 14px; padding: 14px 18px; background: var(--accent); color: white; font: inherit; font-weight: 700; cursor: pointer; }
+.auth-submit:disabled { opacity: 0.6; cursor: wait; }
+.auth-card .auth-error { margin: 10px 0 0; color: #c43b3b; font-size: 0.88rem; }
+.auth-card .auth-error.hidden { display: none; }
 .profile-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .profile-option { border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 14px; padding: 18px 12px; cursor: pointer; font: inherit; font-weight: 600; transition: border 0.2s ease, transform 0.15s ease, background 0.2s ease; }
 .profile-option:hover { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-2px); }

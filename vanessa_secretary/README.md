@@ -21,6 +21,8 @@ Provider options:
 
 Conversation history is stored in `/data/vanessa.db` and synchronized between devices using the same add-on and profile. The `/data` directory persists across add-on restarts and upgrades.
 
+Set `access_password` in the add-on configuration. Each browser enters it once; changing it invalidates all existing browser sessions.
+
 Optional search options:
 
 - `search_provider`: `google` or `brave`.
