@@ -19,6 +19,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const logFile = path.join(root, 'server.log');
 const maxFileBytes = Math.min(25, Math.max(1, Number(process.env.MAX_FILE_SIZE_MB) || 10)) * 1024 * 1024;
 const maxExtractedChars = Math.min(500000, Math.max(1000, Number(process.env.MAX_EXTRACTED_CHARS) || 100000));
+const supportedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: maxFileBytes, files: 1 },
@@ -234,14 +235,14 @@ function createSearchContext(search, results) {
 
 app.use(cors());
 app.use(compression());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: `${Math.ceil(maxFileBytes * 5 * 4 / 3 / 1024 / 1024) + 2}mb` }));
 
 app.get(`${basePath}/api/health`, (_req, res) => {
   res.json({ status: 'ok', model: process.env.MODEL || 'gpt-4o-mini' });
 });
 
 app.get(`${basePath}/api/config`, (_req, res) => {
-  res.json({ model: process.env.MODEL || 'gpt-4o-mini', version: '2026.09.28-3', maxFileSizeMb: maxFileBytes / 1024 / 1024 });
+  res.json({ model: process.env.MODEL || 'gpt-4o-mini', version: '2026.09.29-1', maxFileSizeMb: maxFileBytes / 1024 / 1024 });
 });
 
 app.post(`${basePath}/api/files/extract`, upload.single('file'), async (req, res) => {
@@ -294,6 +295,27 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
       };
       const lastUserIndex = payloadMessages.findLastIndex(message => message.role === 'user');
       payloadMessages = payloadMessages.toSpliced(lastUserIndex, 0, fileContext);
+    }
+
+    const safeImages = attachments.slice(0, 5).flatMap(attachment => {
+      if (!attachment || typeof attachment.name !== 'string' || typeof attachment.imageUrl !== 'string' || !supportedImageTypes.has(attachment.type)) return [];
+      const prefix = `data:${attachment.type};base64,`;
+      if (!attachment.imageUrl.startsWith(prefix)) return [];
+      const encoded = attachment.imageUrl.slice(prefix.length);
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || Math.ceil(encoded.length * 3 / 4) > maxFileBytes) return [];
+      return [{ name: attachment.name.slice(0, 255), imageUrl: attachment.imageUrl }];
+    });
+    if (safeImages.length) {
+      const lastUserIndex = payloadMessages.findLastIndex(message => message.role === 'user');
+      const userMessage = payloadMessages[lastUserIndex];
+      const text = typeof userMessage.content === 'string' ? userMessage.content : '';
+      payloadMessages[lastUserIndex] = {
+        ...userMessage,
+        content: [
+          { type: 'text', text },
+          ...safeImages.map(image => ({ type: 'image_url', image_url: { url: image.imageUrl, detail: 'auto' } })),
+        ],
+      };
     }
   }
 

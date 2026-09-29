@@ -13,6 +13,7 @@ let conversations = [];
 let activeId = null;
 let isLoading = false;
 let currentModel = '';
+let maxFileSizeMb = 10;
 let pendingAttachments = [];
 const messageAttachments = new Map();
 
@@ -40,7 +41,7 @@ document.querySelector('#app').innerHTML = `
     <button class="scroll-bottom hidden" id="scroll-bottom" type="button" aria-label="Cuộn xuống cuối">${icons.arrowDown}</button>
     <form class="composer" id="composer">
       <div class="attachment-list hidden" id="attachment-list"></div>
-      <div class="composer-inner"><input id="file-input" type="file" hidden multiple accept=".txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.html,.htm,.css,.js,.mjs,.cjs,.ts,.tsx,.jsx,.vue,.svelte,.py,.java,.kt,.kts,.c,.h,.cpp,.hpp,.cs,.go,.rs,.rb,.php,.swift,.sql,.sh,.bash,.ps1,.bat,.cmd,.ini,.toml,.env,.log,.conf,.properties,.gradle,.dockerfile,.gitignore,.graphql,.gql,.r,.lua,.tex,.pdf,.docx,.xlsx,.pptx"><button class="attach-btn" id="attach" type="button" aria-label="Đính kèm file" title="Đính kèm file">${icons.paperclip}</button><textarea id="prompt" rows="1" placeholder="Hỏi bất kỳ điều gì..." aria-label="Nội dung câu hỏi"></textarea><button class="send-btn" id="send" type="submit" disabled>${icons.send}</button></div>
+      <div class="composer-inner"><input id="file-input" type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.xml,.yaml,.yml,.html,.htm,.css,.js,.mjs,.cjs,.ts,.tsx,.jsx,.vue,.svelte,.py,.java,.kt,.kts,.c,.h,.cpp,.hpp,.cs,.go,.rs,.rb,.php,.swift,.sql,.sh,.bash,.ps1,.bat,.cmd,.ini,.toml,.env,.log,.conf,.properties,.gradle,.dockerfile,.gitignore,.graphql,.gql,.r,.lua,.tex,.pdf,.docx,.xlsx,.pptx"><button class="attach-btn" id="attach" type="button" aria-label="Đính kèm file hoặc ảnh" title="Đính kèm file hoặc ảnh">${icons.paperclip}</button><textarea id="prompt" rows="1" placeholder="Hỏi bất kỳ điều gì..." aria-label="Nội dung câu hỏi"></textarea><button class="send-btn" id="send" type="submit" disabled>${icons.send}</button></div>
     </form>
   </main>`;
 
@@ -317,12 +318,12 @@ async function streamResponse(messages, assistantMessage, attachments) {
 async function submitPrompt(event) {
   event.preventDefault();
   const content = elements.prompt.value.trim();
-  if ((!content && !pendingAttachments.some(file => file.content)) || isLoading || pendingAttachments.some(file => file.loading)) return;
+  if ((!content && !pendingAttachments.some(file => file.content || file.imageUrl)) || isLoading || pendingAttachments.some(file => file.loading)) return;
   if (!activeConversation()) createConversation();
   const conversation = activeConversation();
-  const attachments = pendingAttachments.filter(file => file.content).map(file => ({ name: file.name, content: file.content }));
+  const attachments = pendingAttachments.filter(file => file.content || file.imageUrl).map(file => ({ name: file.name, content: file.content, imageUrl: file.imageUrl, type: file.type }));
   const attachmentNames = attachments.map(file => file.name);
-  const displayContent = content || 'Hãy đọc và phân tích file đính kèm.';
+  const displayContent = content || 'Hãy đọc và phân tích nội dung đính kèm.';
   const userMessage = { id: crypto.randomUUID(), role: 'user', content: displayContent, attachmentNames, createdAt: Date.now() };
   conversation.messages.push(userMessage);
   if (attachments.length) messageAttachments.set(userMessage.id, attachments);
@@ -421,6 +422,21 @@ elements['file-input'].addEventListener('change', async event => {
   for (const file of [...event.target.files].slice(0, slots)) await uploadAttachment(file);
   event.target.value = '';
 });
+document.addEventListener('paste', async event => {
+  if (isLoading || !currentProfile) return;
+  const images = [...(event.clipboardData?.items || [])]
+    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .map(item => item.getAsFile())
+    .filter(Boolean);
+  if (!images.length) return;
+  event.preventDefault();
+  const slots = Math.max(0, 5 - pendingAttachments.length);
+  for (const [index, image] of images.slice(0, slots).entries()) {
+    const extension = image.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+    const file = new File([image], `clipboard-${Date.now()}-${index + 1}.${extension}`, { type: image.type });
+    await uploadAttachment(file);
+  }
+});
 elements['attachment-list'].addEventListener('click', event => {
   const retryButton = event.target.closest('[data-retry-file]');
   if (retryButton && !isLoading) {
@@ -480,6 +496,7 @@ elements['profile-gate'].addEventListener('click', event => {
 
 fetch(`${API_BASE}/config`).then(response => response.json()).then(config => {
   currentModel = config.model;
+  maxFileSizeMb = config.maxFileSizeMb;
   elements['app-version'].textContent = `${config.model} · ${config.version}`;
   updateSendState();
 }).catch(error => {
@@ -492,10 +509,11 @@ setupScrollButton();
 elements.prompt.focus();
 
 async function uploadAttachment(file) {
-  const attachment = { name: file.name, file, loading: true, error: '' };
+  const attachment = { name: file.name, type: file.type, file, loading: true, error: '' };
   pendingAttachments.push(attachment);
   renderAttachments();
-  await extractAttachment(attachment);
+  if (file.type.startsWith('image/')) await readImageAttachment(attachment);
+  else await extractAttachment(attachment);
 }
 
 async function retryAttachment(index) {
@@ -504,7 +522,26 @@ async function retryAttachment(index) {
   attachment.loading = true;
   attachment.error = '';
   renderAttachments();
-  await extractAttachment(attachment);
+  if (attachment.type.startsWith('image/')) await readImageAttachment(attachment);
+  else await extractAttachment(attachment);
+}
+
+async function readImageAttachment(attachment) {
+  const supportedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+  try {
+    if (!supportedTypes.has(attachment.type)) throw new Error('Ảnh phải có định dạng JPEG, PNG, WebP hoặc GIF.');
+    if (attachment.file.size > maxFileSizeMb * 1024 * 1024) throw new Error(`Ảnh vượt quá giới hạn ${maxFileSizeMb} MB.`);
+    attachment.imageUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Không thể đọc ảnh.'));
+      reader.readAsDataURL(attachment.file);
+    });
+    attachment.loading = false;
+  } catch (error) {
+    Object.assign(attachment, { loading: false, error: error.message });
+  }
+  renderAttachments();
 }
 
 async function extractAttachment(attachment) {
@@ -523,12 +560,12 @@ async function extractAttachment(attachment) {
 
 function renderAttachments() {
   elements['attachment-list'].classList.toggle('hidden', pendingAttachments.length === 0);
-  elements['attachment-list'].innerHTML = pendingAttachments.map((file, index) => `<div class="attachment-chip ${file.error ? 'error' : ''}"><span>${escapeHtml(file.name)}</span><small>${file.loading ? 'Đang đọc...' : file.error || (file.truncated ? 'Đã đọc · rút gọn' : 'Đã đọc')}</small><div class="attachment-actions">${file.error ? `<button type="button" data-retry-file="${index}" aria-label="Thử đọc lại" title="Thử lại">${icons.retry}</button>` : ''}<button type="button" data-remove-file="${index}" aria-label="Bỏ file" title="Bỏ file">${icons.close}</button></div></div>`).join('');
+  elements['attachment-list'].innerHTML = pendingAttachments.map((file, index) => `<div class="attachment-chip ${file.error ? 'error' : ''} ${file.imageUrl ? 'image' : ''}">${file.imageUrl ? `<img src="${file.imageUrl}" alt="">` : ''}<span>${escapeHtml(file.name)}</span><small>${file.loading ? 'Đang đọc...' : file.error || (file.imageUrl ? 'Ảnh' : file.truncated ? 'Đã đọc · rút gọn' : 'Đã đọc')}</small><div class="attachment-actions">${file.error ? `<button type="button" data-retry-file="${index}" aria-label="Thử đọc lại" title="Thử lại">${icons.retry}</button>` : ''}<button type="button" data-remove-file="${index}" aria-label="Bỏ file" title="Bỏ file">${icons.close}</button></div></div>`).join('');
   updateSendState();
 }
 
 function updateSendState() {
-  elements.send.disabled = !currentModel || isLoading || pendingAttachments.some(file => file.loading) || (!elements.prompt.value.trim() && !pendingAttachments.some(file => file.content));
+  elements.send.disabled = !currentModel || isLoading || pendingAttachments.some(file => file.loading) || (!elements.prompt.value.trim() && !pendingAttachments.some(file => file.content || file.imageUrl));
 }
 
 function isNearBottom(container, threshold = 120) {

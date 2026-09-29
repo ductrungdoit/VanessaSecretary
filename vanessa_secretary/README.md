@@ -46,3 +46,5 @@ File options:
 
 - `max_file_size_mb`: Per-file upload limit from 1 to 25 MB.
 - `max_extracted_chars`: Maximum extracted characters per file.
+
+JPEG, PNG, WebP, and GIF images can be selected or pasted from the clipboard. Image analysis requires a vision-capable model at the configured provider.

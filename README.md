@@ -9,6 +9,7 @@ Vanessa Secretary is a private AI chat interface for OpenAI-compatible APIs. It 
 - Separate local histories for Vincent and Dolly profiles.
 - Desktop and mobile layouts with light and dark themes.
 - In-memory extraction of text, source code, PDF, DOCX, XLSX, and PPTX files.
+- JPEG, PNG, WebP, and GIF input for vision-capable models, selected or pasted from the clipboard.
 - Retry controls for failed uploads and model responses.
 - Optional Google or Brave web search integration.
 - Docker image compatible with ARM64 devices such as Raspberry Pi 5.
@@ -76,6 +77,8 @@ The attachment button accepts up to five files per message. Supported formats in
 - Plain text, Markdown, CSV, JSON, XML, YAML, HTML, logs, and configuration files.
 - Common source-code formats.
 - PDF, DOCX, XLSX, and PPTX.
+
+Image analysis requires the configured model and OpenAI-compatible endpoint to support vision input.
 
 Legacy DOC, XLS, and PPT files must be converted to their newer formats first.
 
