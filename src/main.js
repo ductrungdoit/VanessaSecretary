@@ -47,7 +47,7 @@ document.querySelector('#app').innerHTML = `
       <button class="auth-submit" id="auth-submit" type="submit">Mở Vanessa</button>
     </form>
   </div>
-  <div class="profile-gate ${currentProfile ? 'hidden' : ''}" id="profile-gate">
+  <div class="profile-gate hidden" id="profile-gate">
     <div class="profile-card">
       <div class="profile-mark">${icons.secretary}</div>
       <h1>Vanessa The Secretary</h1>
@@ -700,6 +700,7 @@ async function initializeApp() {
   }
   render({ scrollToEnd: true, revealAtEnd: true });
   elements['auth-gate'].classList.add('hidden');
+  if (!currentProfile) elements['profile-gate'].classList.remove('hidden');
   elements.prompt.focus();
 }
 
