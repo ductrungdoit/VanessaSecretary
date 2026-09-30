@@ -152,6 +152,13 @@ textarea {
 
 .profile-gate { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: grid; place-items: center; padding: 24px; }
 .profile-gate.hidden { display: none; }
+.startup-gate { position: fixed; inset: 0; z-index: 110; display: grid; place-content: center; justify-items: center; gap: 14px; background: var(--bg); color: var(--muted); }
+.startup-gate.hidden, .app-shell.hidden { display: none; }
+.startup-gate .hidden { display: none; }
+.startup-gate p { margin: 0; font-size: 0.9rem; }
+.startup-mark { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 16px; background: var(--accent-soft); color: var(--accent); }
+.startup-mark svg { width: 28px; height: 28px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+.startup-spinner { width: 22px; height: 22px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: startupSpin 0.75s linear infinite; }
 .profile-card { width: min(440px, 100%); padding: 36px; background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); text-align: center; }
 .profile-mark { width: 52px; height: 52px; display: grid; place-items: center; margin: 0 auto 16px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); }
 .profile-mark svg { width: 28px; height: 28px; stroke: currentColor; fill: none; stroke-width: 1.8; }
@@ -174,6 +181,7 @@ textarea {
 @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
 @keyframes thinkingPulse { 0% { box-shadow: 0 0 0 0 rgba(52, 122, 89, 0.4); } 70%, 100% { box-shadow: 0 0 0 8px rgba(52, 122, 89, 0); } }
 @keyframes cursorBlink { 50% { opacity: 0; } }
+@keyframes startupSpin { to { transform: rotate(360deg); } }
 
 @media (max-width: 640px) {
   #app { grid-template-columns: 1fr; }

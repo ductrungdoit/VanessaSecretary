@@ -41,7 +41,13 @@ marked.use({ breaks: true, gfm: true });
 
 document.documentElement.dataset.theme = localStorage.getItem(THEME_KEY) || 'light';
 document.querySelector('#app').innerHTML = `
-  <div class="profile-gate" id="auth-gate">
+  <div class="startup-gate" id="startup-gate" role="status">
+    <div class="startup-mark">${icons.secretary}</div>
+    <div class="startup-spinner" id="startup-spinner" aria-hidden="true"></div>
+    <p id="startup-message">Đang mở Vanessa...</p>
+    <button class="auth-submit hidden" id="startup-retry" type="button">Thử lại</button>
+  </div>
+  <div class="profile-gate hidden" id="auth-gate">
     <form class="profile-card auth-card" id="auth-form">
       <div class="profile-mark">${icons.secretary}</div>
       <h1>Vanessa The Secretary</h1>
@@ -59,13 +65,13 @@ document.querySelector('#app').innerHTML = `
       <div class="profile-options">${PROFILES.map(name => `<button class="profile-option" data-profile="${name}"><span class="avatar">${name[0]}</span>${name}</button>`).join('')}</div>
     </div>
   </div>
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar app-shell hidden" id="sidebar">
     <div class="brand">${icons.secretary}<span>Vanessa The Secretary</span></div>
     <button class="new-chat" id="new-chat">${icons.plus} Cuộc trò chuyện mới</button>
     <ul class="history-list" id="history-list"></ul>
     <div class="sidebar-footer"><button class="profile-button" id="profile-button" title="Đổi người dùng"><span class="avatar" id="profile-avatar"></span><span id="profile-name"></span></button><button class="theme-toggle" id="theme-toggle" aria-label="Đổi giao diện"></button></div>
   </aside>
-  <main class="chat-area">
+  <main class="chat-area app-shell hidden" id="chat-area">
     <header class="chat-header"><div><div class="chat-title" id="chat-title">Cuộc trò chuyện mới</div><small class="app-version" id="app-version">Đang kết nối...</small></div><div class="header-actions"><label class="model-picker"><span>Model</span><select id="model-select" aria-label="Chọn model" disabled><option>Đang tải...</option></select></label><button class="mobile-menu" id="mobile-menu" aria-label="Mở menu">${icons.menu}</button></div></header>
     <section class="messages" id="messages"></section>
     <button class="scroll-bottom hidden" id="scroll-bottom" type="button" aria-label="Cuộn xuống cuối">${icons.arrowDown}</button>
@@ -75,7 +81,7 @@ document.querySelector('#app').innerHTML = `
     </form>
   </main>`;
 
-const elements = Object.fromEntries(['sidebar', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version', 'model-select', 'auth-gate', 'auth-form', 'auth-password', 'auth-error', 'auth-submit'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['startup-gate', 'startup-spinner', 'startup-message', 'startup-retry', 'sidebar', 'chat-area', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version', 'model-select', 'auth-gate', 'auth-form', 'auth-password', 'auth-error', 'auth-submit'].map(id => [id, document.getElementById(id)]));
 
 function storageKey(profile = currentProfile) {
   return `${STORAGE_PREFIX}:${profile?.toLowerCase()}`;
@@ -92,11 +98,30 @@ async function api(path, options = {}) {
 }
 
 function showAuthGate(message = '') {
+  elements['startup-gate'].classList.add('hidden');
+  document.querySelectorAll('.app-shell').forEach(element => element.classList.add('hidden'));
   elements['profile-gate'].classList.add('hidden');
   elements['auth-gate'].classList.remove('hidden');
   elements['auth-error'].textContent = message;
   elements['auth-error'].classList.toggle('hidden', !message);
   elements['auth-password'].focus();
+}
+
+function showStartupGate() {
+  elements['auth-gate'].classList.add('hidden');
+  elements['profile-gate'].classList.add('hidden');
+  document.querySelectorAll('.app-shell').forEach(element => element.classList.add('hidden'));
+  elements['startup-message'].textContent = 'Đang mở Vanessa...';
+  elements['startup-spinner'].classList.remove('hidden');
+  elements['startup-retry'].classList.add('hidden');
+  elements['startup-gate'].classList.remove('hidden');
+}
+
+function showStartupError(message) {
+  showStartupGate();
+  elements['startup-message'].textContent = message;
+  elements['startup-spinner'].classList.add('hidden');
+  elements['startup-retry'].classList.remove('hidden');
 }
 
 async function responseError(response) {
@@ -193,6 +218,38 @@ function renderMarkdown(content) {
     link.rel = 'noopener noreferrer';
   });
   return wrapper.innerHTML;
+}
+
+function clipboardContent(fragment) {
+  const wrapper = document.createElement('div');
+  wrapper.append(fragment.cloneNode(true));
+  wrapper.querySelectorAll('.stream-cursor, .message-files').forEach(element => element.remove());
+  wrapper.querySelectorAll('*').forEach(element => {
+    element.removeAttribute('bgcolor');
+    element.style.removeProperty('background');
+    element.style.removeProperty('background-color');
+    if (!element.getAttribute('style')) element.removeAttribute('style');
+  });
+  return wrapper.innerHTML;
+}
+
+function copySelection(element) {
+  const selection = window.getSelection();
+  const previousRanges = selection ? [...Array(selection.rangeCount)].map((_, index) => selection.getRangeAt(index).cloneRange()) : [];
+  const previousFocus = document.activeElement;
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  let copied = false;
+  try {
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    copied = document.execCommand('copy');
+  } finally {
+    selection?.removeAllRanges();
+    previousRanges.forEach(previousRange => selection?.addRange(previousRange));
+    previousFocus?.focus();
+  }
+  if (!copied) throw new Error('Copy command failed');
 }
 
 function stripThinking(content) {
@@ -299,11 +356,12 @@ function syncMessageNode(node, message) {
   }
   if (message.role === 'assistant' && message.content) {
     if (!meta.querySelector('.copy-btn')) {
-      const copyBtn = document.createElement('button');
-      copyBtn.className = 'copy-btn';
-      copyBtn.dataset.copy = message.id;
-      copyBtn.innerHTML = `${icons.copy} Sao chép`;
-      meta.append(copyBtn);
+      const copyButton = document.createElement('button');
+      copyButton.className = 'copy-btn';
+      copyButton.type = 'button';
+      copyButton.dataset.copy = message.id;
+      copyButton.innerHTML = `${icons.copy} Sao chép`;
+      meta.append(copyButton);
     }
   } else {
     meta.querySelector('.copy-btn')?.remove();
@@ -662,9 +720,23 @@ elements.messages.addEventListener('click', async event => {
   }
   const button = event.target.closest('[data-copy]');
   if (!button) return;
-  const message = activeConversation()?.messages.find(item => item.id === button.dataset.copy);
-  if (message) await navigator.clipboard.writeText(message.content);
-  button.textContent = 'Đã sao chép';
+  const bubble = button.closest('.message')?.querySelector('.bubble');
+  if (!bubble) return;
+  try {
+    copySelection(bubble);
+    button.textContent = 'Đã sao chép';
+  } catch {
+    button.textContent = 'Không thể sao chép';
+  }
+});
+elements.messages.addEventListener('copy', event => {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return;
+  const text = selection.toString();
+  const html = clipboardContent(selection.getRangeAt(0).cloneContents());
+  event.clipboardData?.setData('text/html', html);
+  event.clipboardData?.setData('text/plain', text);
+  event.preventDefault();
 });
 elements['theme-toggle'].addEventListener('click', () => {
   const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
@@ -713,6 +785,8 @@ async function initializeApp() {
     if (conversationIdFromUrl() && !activeId) setConversationUrl(null, { replace: true });
   }
   render({ scrollToEnd: true, revealAtEnd: true });
+  elements['startup-gate'].classList.add('hidden');
+  document.querySelectorAll('.app-shell').forEach(element => element.classList.remove('hidden'));
   elements['auth-gate'].classList.add('hidden');
   if (!currentProfile) elements['profile-gate'].classList.remove('hidden');
   elements.prompt.focus();
@@ -722,7 +796,7 @@ async function startAuthenticatedApp() {
   try {
     await initializeApp();
   } catch (error) {
-    showAuthGate(`Đã xác thực nhưng không thể tải Vanessa. ${error.message}`);
+    showStartupError(`Đã xác thực nhưng không thể tải Vanessa. ${error.message}`);
   }
 }
 
@@ -732,12 +806,16 @@ async function checkAuthentication() {
     if (!response.ok) throw new Error(await responseError(response));
     const auth = await response.json();
     if (!auth.required || auth.authenticated) return await startAuthenticatedApp();
-    elements['auth-password'].focus();
+    showAuthGate();
   } catch (error) {
-    elements['auth-error'].textContent = `Không thể kết nối với Vanessa. ${error.message}`;
-    elements['auth-error'].classList.remove('hidden');
+    showStartupError(`Không thể kết nối với Vanessa. ${error.message}`);
   }
 }
+
+elements['startup-retry'].addEventListener('click', () => {
+  showStartupGate();
+  checkAuthentication();
+});
 
 elements['auth-form'].addEventListener('submit', async event => {
   event.preventDefault();
@@ -753,7 +831,7 @@ elements['auth-form'].addEventListener('submit', async event => {
       throw new Error(await responseError(response));
     }
     elements['auth-password'].value = '';
-    elements['auth-gate'].classList.add('hidden');
+    showStartupGate();
     await startAuthenticatedApp();
   } catch (error) {
     elements['auth-error'].textContent = error.message;
