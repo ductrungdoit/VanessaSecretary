@@ -15,14 +15,30 @@ on:
       - vite.config.js
       - vanessa_secretary/config.yaml
       - .github/workflows/publish-addon-image.yml
-  workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      addon: ${{ steps.version.outputs.addon }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: version
+        run: |
+          version=$(sed -n 's/^version: "\(.*\)"/\1/p' vanessa_secretary/config.yaml)
+          previous=$(git show HEAD^:vanessa_secretary/config.yaml | sed -n 's/^version: "\(.*\)"/\1/p')
+          test -n "$version"
+          test "$version" != "$previous"
+          echo "addon=$version" >> "$GITHUB_OUTPUT"
+
   publish:
+    needs: version
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -47,5 +63,5 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ghcr.io/ductrungdoit/vanessa-secretary-${{ matrix.arch }}:1.0.5
+            ghcr.io/ductrungdoit/vanessa-secretary-${{ matrix.arch }}:${{ needs.version.outputs.addon }}
             ghcr.io/ductrungdoit/vanessa-secretary-${{ matrix.arch }}:latest

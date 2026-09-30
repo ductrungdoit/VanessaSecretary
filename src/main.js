@@ -11,6 +11,10 @@ const MIGRATION_KEY = 'vanessa-history-migrated';
 const PROFILES = ['Vincent', 'Dolly'];
 
 let currentProfile = localStorage.getItem(PROFILE_KEY);
+if (!PROFILES.includes(currentProfile)) {
+  currentProfile = null;
+  localStorage.removeItem(PROFILE_KEY);
+}
 let conversations = [];
 let activeId = null;
 let isLoading = false;
@@ -82,8 +86,17 @@ async function api(path, options = {}) {
     ...options,
     headers: options.body ? { 'Content-Type': 'application/json', ...options.headers } : options.headers,
   });
+  if (response.status === 401) showAuthGate();
   if (!response.ok) throw new Error(await responseError(response));
   return response.status === 204 ? null : response.json();
+}
+
+function showAuthGate(message = '') {
+  elements['profile-gate'].classList.add('hidden');
+  elements['auth-gate'].classList.remove('hidden');
+  elements['auth-error'].textContent = message;
+  elements['auth-error'].classList.toggle('hidden', !message);
+  elements['auth-password'].focus();
 }
 
 async function responseError(response) {
@@ -295,7 +308,7 @@ function syncMessageNode(node, message) {
   } else {
     meta.querySelector('.copy-btn')?.remove();
   }
-  const failed = message.error || message.content?.startsWith('Không thể kết nối tới mô hình.');
+  const failed = message.error || message.content?.startsWith('Không thể nhận phản hồi.');
   const retryable = failed && !message.attachmentNames?.length;
   if (retryable && !meta.querySelector('.retry-message-btn')) {
     const retryBtn = document.createElement('button');
@@ -407,6 +420,7 @@ async function streamResponse(messages, assistantMessage, attachments, streamCon
     body: JSON.stringify({ messages: messages.map(({ role, content }) => ({ role, content })), model: currentModel, attachments }),
     signal: controller.signal,
   });
+  if (response.status === 401) showAuthGate();
   console.info(`[chat:${requestId}] response`, { status: response.status, statusText: response.statusText, url: response.url, contentType: response.headers.get('content-type') });
   if (!response.ok) {
     const message = await responseError(response);
@@ -704,12 +718,20 @@ async function initializeApp() {
   elements.prompt.focus();
 }
 
+async function startAuthenticatedApp() {
+  try {
+    await initializeApp();
+  } catch (error) {
+    showAuthGate(`Đã xác thực nhưng không thể tải Vanessa. ${error.message}`);
+  }
+}
+
 async function checkAuthentication() {
   try {
     const response = await fetch(`${API_BASE}/auth`);
     if (!response.ok) throw new Error(await responseError(response));
     const auth = await response.json();
-    if (!auth.required || auth.authenticated) return initializeApp();
+    if (!auth.required || auth.authenticated) return await startAuthenticatedApp();
     elements['auth-password'].focus();
   } catch (error) {
     elements['auth-error'].textContent = `Không thể kết nối với Vanessa. ${error.message}`;
@@ -731,7 +753,8 @@ elements['auth-form'].addEventListener('submit', async event => {
       throw new Error(await responseError(response));
     }
     elements['auth-password'].value = '';
-    await initializeApp();
+    elements['auth-gate'].classList.add('hidden');
+    await startAuthenticatedApp();
   } catch (error) {
     elements['auth-error'].textContent = error.message;
     elements['auth-error'].classList.remove('hidden');
@@ -785,6 +808,7 @@ async function extractAttachment(attachment) {
   formData.append('file', attachment.file);
   try {
     const response = await fetch(`${API_BASE}/files/extract`, { method: 'POST', body: formData });
+    if (response.status === 401) showAuthGate();
     if (!response.ok) throw new Error(await responseError(response));
     const result = await response.json();
     Object.assign(attachment, { content: result.text, loading: false, truncated: result.truncated });

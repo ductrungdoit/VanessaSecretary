@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import compression from 'compression';
-import cors from 'cors';
 import crypto from 'node:crypto';
 import ExcelJS from 'exceljs';
 import express from 'express';
@@ -23,6 +22,7 @@ const logFile = path.join(root, 'server.log');
 const maxFileBytes = Math.min(25, Math.max(1, Number(process.env.MAX_FILE_SIZE_MB) || 10)) * 1024 * 1024;
 const maxExtractedChars = Math.min(500000, Math.max(1000, Number(process.env.MAX_EXTRACTED_CHARS) || 100000));
 const accessPassword = process.env.ACCESS_PASSWORD || '';
+const allowInsecureHttp = process.env.ALLOW_INSECURE_HTTP === 'true';
 const authCookie = 'vanessa_auth';
 const authMaxAgeSeconds = 365 * 24 * 60 * 60;
 const loginAttempts = new Map();
@@ -61,7 +61,12 @@ function isAuthenticated(req) {
   if (!accessPassword) return true;
   const cookie = (req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${authCookie}=`));
   if (!cookie) return false;
-  const token = decodeURIComponent(cookie.slice(authCookie.length + 1));
+  let token;
+  try {
+    token = decodeURIComponent(cookie.slice(authCookie.length + 1));
+  } catch {
+    return false;
+  }
   const separator = token.indexOf('.');
   if (separator < 1) return false;
   const expiresAt = token.slice(0, separator);
@@ -75,11 +80,23 @@ function recordFailedLogin(req) {
   const key = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
   const recent = (loginAttempts.get(key) || []).filter(timestamp => now - timestamp < 15 * 60 * 1000);
-  if (recent.length >= 10) return true;
+  if (recent.length >= 10) {
+    loginAttempts.set(key, recent);
+    return true;
+  }
   recent.push(now);
   loginAttempts.set(key, recent);
   return false;
 }
+
+setInterval(() => {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  for (const [key, timestamps] of loginAttempts) {
+    const recent = timestamps.filter(timestamp => timestamp >= cutoff);
+    if (recent.length) loginAttempts.set(key, recent);
+    else loginAttempts.delete(key);
+  }
+}, 15 * 60 * 1000).unref();
 
 function shouldTryNextModel(status) {
   return [400, 404, 408, 409, 422, 429].includes(status) || status >= 500;
@@ -287,12 +304,12 @@ function createSearchContext(search, results) {
   };
 }
 
-app.use(cors());
+app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use(compression());
 app.use(express.json({ limit: `${Math.ceil(maxFileBytes * 5 * 4 / 3 / 1024 / 1024) + 2}mb` }));
 
 app.get(`${basePath}/api/health`, (_req, res) => {
-  res.json({ status: 'ok', model: activeModel || configuredModels()[0], models: configuredModels() });
+  res.json({ status: 'ok' });
 });
 
 app.get(`${basePath}/api/auth`, (req, res) => {
@@ -301,13 +318,15 @@ app.get(`${basePath}/api/auth`, (req, res) => {
 
 app.post(`${basePath}/api/auth`, (req, res) => {
   if (!accessPassword) return res.status(204).end();
+  if (process.env.NODE_ENV === 'production' && !allowInsecureHttp && !req.secure) {
+    return res.status(426).json({ error: 'Đăng nhập yêu cầu HTTPS. Cấu hình reverse proxy TLS hoặc bật allow_insecure_http cho mạng LAN tin cậy.' });
+  }
   if (typeof req.body?.password !== 'string' || !safeEqual(req.body.password, accessPassword)) {
     if (recordFailedLogin(req)) return res.status(429).json({ error: 'Quá nhiều lần thử. Vui lòng thử lại sau.' });
     return res.status(401).json({ error: 'Sai mật khẩu, vui lòng liên hệ anh Đức Trung đẹp trai để được sử dụng' });
   }
   loginAttempts.delete(req.ip || req.socket.remoteAddress || 'unknown');
-  const secure = req.secure || req.get('x-forwarded-proto') === 'https';
-  res.cookie(authCookie, createAuthToken(), { httpOnly: true, sameSite: 'strict', secure, maxAge: authMaxAgeSeconds * 1000, path: `${basePath}/` });
+  res.cookie(authCookie, createAuthToken(), { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: authMaxAgeSeconds * 1000, path: `${basePath}/` });
   res.status(204).end();
 });
 
@@ -583,5 +602,10 @@ app.get(`${basePath}/*`, (req, res, next) => {
   if (req.path.startsWith(`${basePath}/api/`)) return next();
   res.sendFile(path.join(root, 'dist', 'index.html'));
 });
+
+if (process.env.NODE_ENV === 'production' && !accessPassword) {
+  console.error('ACCESS_PASSWORD is required in production. Set access_password in the add-on configuration.');
+  process.exit(1);
+}
 
 app.listen(port, () => console.log(`Server running at http://localhost:${port}`));

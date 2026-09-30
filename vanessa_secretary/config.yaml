@@ -1,5 +1,5 @@
 name: Vanessa Secretary
-version: "1.0.5"
+version: "1.0.6"
 slug: vanessa_secretary
 description: Private AI secretary with streaming chat and document analysis
 url: https://github.com/ductrungdoit/VanessaSecretary
@@ -20,6 +20,7 @@ options:
   openai_base_url: https://api.openai.com/v1
   model: gpt-4o-mini
   access_password: ""
+  allow_insecure_http: false
   fallback_model_1: ""
   fallback_model_2: ""
   fallback_model_3: ""
@@ -37,6 +38,7 @@ schema:
   openai_base_url: url
   model: str
   access_password: password
+  allow_insecure_http: bool
   fallback_model_1: str?
   fallback_model_2: str?
   fallback_model_3: str?

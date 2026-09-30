@@ -9,6 +9,7 @@ if [ -f "$OPTIONS_FILE" ]; then
   export MODEL="$(jq -r '.model // "gpt-4o-mini"' "$OPTIONS_FILE")"
   export MODEL_FALLBACKS="$(jq -r '[.fallback_model_1, .fallback_model_2, .fallback_model_3] | map(select(. != null and . != "")) | join(",")' "$OPTIONS_FILE")"
   export ACCESS_PASSWORD="$(jq -r '.access_password // empty' "$OPTIONS_FILE")"
+  export ALLOW_INSECURE_HTTP="$(jq -r '.allow_insecure_http // false' "$OPTIONS_FILE")"
   export SYSTEM_PROMPT="$(jq -r '.system_prompt // "You are a helpful, accurate, and concise AI assistant."' "$OPTIONS_FILE")"
   export SEARCH_PROVIDER="$(jq -r '.search_provider // "google"' "$OPTIONS_FILE")"
   export GOOGLE_SEARCH_API_KEY="$(jq -r '.google_search_api_key // empty' "$OPTIONS_FILE")"
