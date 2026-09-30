@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/chatbot/',
+  base: './',
   server: {
     proxy: {
       '/chatbot/api': {

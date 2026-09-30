@@ -1,12 +1,18 @@
 # Vanessa Secretary Home Assistant Add-on
 
-This add-on runs Vanessa Secretary on Home Assistant OS. After installation, configure the model provider in the add-on Configuration tab and open:
+This add-on runs Vanessa Secretary on Home Assistant OS. After installation, configure the model provider in the add-on Configuration tab, start the add-on, then use **Open Web UI** on the Info tab.
+
+Enable **Show in sidebar** on the Info tab to open Vanessa directly from the Home Assistant sidebar. Home Assistant Ingress handles access through the Home Assistant UI.
+
+Direct LAN access remains available at:
 
 ```text
 http://HOME_ASSISTANT_IP:3000/chatbot/
 ```
 
 The port is intended for LAN access or as the origin of a Cloudflare Tunnel. Do not forward it directly from the router to the internet.
+
+Home Assistant displays **Update** when the repository publishes a newer add-on `version`. Supervisor requires the version to match the container image tag, so add-on updates cannot bypass version increments.
 
 Required option:
 

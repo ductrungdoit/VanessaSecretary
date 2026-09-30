@@ -10,6 +10,12 @@ startup: application
 boot: auto
 init: false
 image: ghcr.io/ductrungdoit/vanessa-secretary-{arch}
+ingress: true
+ingress_port: 3000
+ingress_entry: /chatbot
+panel_icon: mdi:message-text-outline
+panel_title: Vanessa
+panel_admin: false
 ports:
   3000/tcp: 3000
 ports_description:
