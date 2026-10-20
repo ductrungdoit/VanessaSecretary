@@ -1,5 +1,5 @@
 name: Vanessa Secretary
-version: "1.0.10"
+version: "1.0.11"
 slug: vanessa_secretary
 description: Private AI secretary with streaming chat and document analysis
 url: https://github.com/ductrungdoit/VanessaSecretary
@@ -10,12 +10,7 @@ startup: application
 boot: auto
 init: false
 image: ghcr.io/ductrungdoit/vanessa-secretary-{arch}
-ingress: true
-ingress_port: 3000
-ingress_entry: /chatbot
-panel_icon: mdi:message-text-outline
-panel_title: Vanessa
-panel_admin: false
+ingress: false
 ports:
   3000/tcp: 3000
 ports_description:

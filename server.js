@@ -216,7 +216,7 @@ function detectWebSearch(messages) {
   };
 }
 
-async function searchWeb(search, requestId) {
+async function searchWeb(search, requestId, signal) {
   const limit = Math.min(10, Math.max(1, Number(process.env.SEARCH_RESULT_LIMIT) || 8));
   const preferredProvider = (process.env.SEARCH_PROVIDER || 'google').toLowerCase();
   const providers = preferredProvider === 'google' ? ['google', 'brave'] : [preferredProvider];
@@ -224,10 +224,11 @@ async function searchWeb(search, requestId) {
   for (const provider of providers) {
     try {
       const results = provider === 'google'
-        ? await searchGoogle(search.query, limit, requestId)
-        : await searchBrave(search.query, limit, requestId);
+        ? await searchGoogle(search.query, limit, requestId, signal)
+        : await searchBrave(search.query, limit, requestId, signal);
       if (results?.length) return results;
     } catch (error) {
+      if (signal?.aborted) throw error;
       log('ERROR', `[${requestId}] ${provider} search failed: ${error.message}`);
     }
   }
@@ -236,7 +237,7 @@ async function searchWeb(search, requestId) {
   return null;
 }
 
-async function searchGoogle(query, limit, requestId) {
+async function searchGoogle(query, limit, requestId, signal) {
   if (!process.env.GOOGLE_SEARCH_API_KEY || !process.env.GOOGLE_SEARCH_ENGINE_ID) {
     log('INFO', `[${requestId}] Google search skipped: credentials are not configured`);
     return null;
@@ -251,7 +252,7 @@ async function searchGoogle(query, limit, requestId) {
   url.searchParams.set('safe', 'active');
 
   log('INFO', `[${requestId}] Google web search started`);
-  const response = await fetch(url, { signal: searchTimeoutSignal() });
+  const response = await fetch(url, { signal: AbortSignal.any([signal, searchTimeoutSignal()]) });
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
   const data = await response.json();
   const results = normalizeSearchResults(data.items || [], item => ({
@@ -263,7 +264,7 @@ async function searchGoogle(query, limit, requestId) {
   return results;
 }
 
-async function searchBrave(query, limit, requestId) {
+async function searchBrave(query, limit, requestId, signal) {
   if (!process.env.BRAVE_SEARCH_API_KEY) {
     log('INFO', `[${requestId}] Brave search skipped: BRAVE_SEARCH_API_KEY is not configured`);
     return null;
@@ -281,7 +282,7 @@ async function searchBrave(query, limit, requestId) {
       Accept: 'application/json',
       'X-Subscription-Token': process.env.BRAVE_SEARCH_API_KEY,
     },
-    signal: searchTimeoutSignal(),
+    signal: AbortSignal.any([signal, searchTimeoutSignal()]),
   });
   if (!response.ok) throw new Error(`Brave Search HTTP ${response.status}: ${await response.text()}`);
 
@@ -569,6 +570,10 @@ app.post(`${basePath}/api/files/extract`, upload.single('file'), async (req, res
 
 app.post(`${basePath}/api/chat`, async (req, res) => {
   const requestId = `req-${Date.now()}-${++requestCounter}`;
+  const clientAbort = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) clientAbort.abort();
+  });
   log('INFO', `[${requestId}] POST /api/chat model=${req.body?.model || 'unknown'} messages=${Array.isArray(req.body?.messages) ? req.body.messages.length : 0}`);
   const { messages, model: requestedModel, temperature = 0.7, attachments = [] } = req.body ?? {};
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -632,8 +637,9 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
     if (webSearch) {
       let searchResults = null;
       try {
-        searchResults = await searchWeb(webSearch, requestId);
+        searchResults = await searchWeb(webSearch, requestId, clientAbort.signal);
       } catch (error) {
+        if (clientAbort.signal.aborted) throw error;
         log('ERROR', `[${requestId}] Web search failed: ${error.message}`);
       }
       const searchContext = createSearchContext(webSearch, searchResults);
@@ -666,7 +672,7 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
             temperature: Math.min(2, Math.max(0, Number(temperature))),
             stream: true,
           }),
-          signal: AbortSignal.timeout(120000),
+          signal: AbortSignal.any([clientAbort.signal, AbortSignal.timeout(120000)]),
         });
         if (upstream.ok) {
           selectedModel = model;
@@ -679,10 +685,11 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
       } catch (error) {
         lastError = { status: error.name === 'TimeoutError' ? 504 : 502, details: error.message };
         log('ERROR', `[${requestId}] Model ${model} request failed: ${error.message}`);
-        if (index === models.length - 1) break;
+        if (clientAbort.signal.aborted || index === models.length - 1) break;
       }
     }
 
+    if (clientAbort.signal.aborted || res.destroyed) return;
     if (!selectedModel) {
       return res.status(lastError?.status || 502).json({ error: 'Các mô hình hiện không thể phản hồi. Vui lòng thử lại sau.' });
     }
@@ -697,7 +704,7 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
     res.setHeader('X-Vanessa-Model', selectedModel);
 
     const reader = upstream.body.getReader();
-    req.on('close', () => reader.cancel().catch(() => {}));
+    clientAbort.signal.addEventListener('abort', () => reader.cancel().catch(() => {}), { once: true });
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -705,6 +712,7 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
     }
     res.end();
   } catch (error) {
+    if (clientAbort.signal.aborted || res.destroyed) return;
     const cause = error.cause ? ` cause=${error.cause.code || error.cause.message || String(error.cause)}` : '';
     log('ERROR', `[${requestId}] Proxy error: ${error.stack || error.message}${cause}`);
     if (!res.headersSent) {
