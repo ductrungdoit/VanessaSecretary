@@ -32,17 +32,18 @@ Configure at least these values in `.env`:
 
 ```env
 OPENAI_API_KEY=your_api_key_here
-OPENAI_BASE_URL=https://api.openai.com/v1
-MODEL=gpt-4o-mini
-MODEL_FALLBACKS=gpt-4o,gemini-2.5-flash
+OPENAI_BASE_URL=https://llm.mrdnd.dev/v1
+MODEL=gpt-5.6-sol
+MODEL_FALLBACKS=
 ```
 
-Configure zero to three comma-separated fallback models. The backend tries them in order after network errors, timeouts, rate limits, server errors, or model/request incompatibility responses. Requests with images prefer `gpt-5.6-sol` when it is configured. It cannot switch after streaming has already started.
+The model selector is driven by `model-catalog.json`, which records provider, relative cost tier, image-reading support, and image-creation support. Configure zero to three comma-separated fallback models. The backend tries them in order after network errors, timeouts, rate limits, server errors, or model/request incompatibility responses. It cannot switch after streaming has already started.
 
 Open:
 
 ```text
 http://localhost:5173/chatbot/
+http://localhost:5173/chatbot/{conversation-id}
 ```
 
 The Vite development server proxies `/chatbot/api/*` to Express on port `3000`.
@@ -59,6 +60,7 @@ Production URLs:
 
 ```text
 http://localhost:3000/chatbot/
+http://localhost:3000/chatbot/{conversation-id}
 http://localhost:3000/chatbot/api/health
 ```
 

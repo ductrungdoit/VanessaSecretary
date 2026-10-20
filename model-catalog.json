@@ -1,0 +1,154 @@
+[
+  {
+    "id": "claude-fable-5-1",
+    "provider": "Anthropic",
+    "providerLogo": "/anthropic.png",
+    "costMzd": 300,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "claude-opus-5-ccmax",
+    "provider": "Anthropic",
+    "providerLogo": "/anthropic.png",
+    "costMzd": 250,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "claude-opus-5-5",
+    "provider": "Anthropic",
+    "providerLogo": "/anthropic.png",
+    "costMzd": 150,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "claude-opus-5",
+    "provider": "Anthropic",
+    "providerLogo": "/anthropic.png",
+    "costMzd": 100,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "claude-opus-4-8",
+    "provider": "Anthropic",
+    "providerLogo": "/anthropic.png",
+    "costMzd": 80,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "claude-sonnet-5-5",
+    "provider": "Anthropic",
+    "providerLogo": "/anthropic.png",
+    "costMzd": 75,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "gpt-6-sol",
+    "provider": "OpenAI",
+    "providerLogo": "/openai.png",
+    "costMzd": 75,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "gpt-5.6-sol",
+    "provider": "OpenAI",
+    "providerLogo": "/openai.png",
+    "costMzd": 60,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "grok-4.7",
+    "provider": "xAI",
+    "providerLogo": "/xai-logo-png_seeklogo-491313.png",
+    "costMzd": 60,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "gpt-6-luna",
+    "provider": "OpenAI",
+    "providerLogo": "/openai.png",
+    "costMzd": 45,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "glm-5.3-flash",
+    "provider": "Zhipu AI",
+    "providerLogo": "/zhipu-color.png",
+    "costMzd": 40,
+    "canReadImages": false,
+    "canCreateImages": false
+  },
+  {
+    "id": "claude-sonnet-5",
+    "provider": "Anthropic",
+    "providerLogo": "/anthropic.png",
+    "costMzd": 30,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "deepseek-v4.1-flash",
+    "provider": "DeepSeek",
+    "providerLogo": "/DeepSeek-icon.svg.webp",
+    "costMzd": 30,
+    "canReadImages": false,
+    "canCreateImages": false
+  },
+  {
+    "id": "gemini-3.8-flash-high",
+    "provider": "Google Gemini",
+    "providerLogo": "/Google_Gemini_icon_2025.svg.webp",
+    "costMzd": 30,
+    "canReadImages": false,
+    "canCreateImages": false
+  },
+  {
+    "id": "glm-5.3",
+    "provider": "Zhipu AI",
+    "providerLogo": "/zhipu-color.png",
+    "costMzd": 9,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "deepseek-v4-pro",
+    "provider": "DeepSeek",
+    "providerLogo": "/DeepSeek-icon.svg.webp",
+    "costMzd": 7.5,
+    "canReadImages": false,
+    "canCreateImages": false
+  },
+  {
+    "id": "kimi-k3",
+    "provider": "Kimi",
+    "providerLogo": "/kimi-logo-png-svg.webp",
+    "costMzd": 4,
+    "canReadImages": true,
+    "canCreateImages": false
+  },
+  {
+    "id": "MiniMax-M3",
+    "provider": "MiniMax",
+    "providerLogo": "/minimax-color.png",
+    "costMzd": 3,
+    "canReadImages": false,
+    "canCreateImages": false
+  },
+  {
+    "id": "grok-composer-2.5-fast",
+    "provider": "xAI",
+    "providerLogo": "/xai-logo-png_seeklogo-491313.png",
+    "costMzd": 2,
+    "canReadImages": false,
+    "canCreateImages": false
+  }
+]

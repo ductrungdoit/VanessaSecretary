@@ -3,12 +3,14 @@ import { icons } from './icons.js';
 import './styles.css';
 
 const STORAGE_PREFIX = 'vanessa-conversations';
+const APP_BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, '');
 const API_BASE = `${import.meta.env.BASE_URL}api`;
 const THEME_KEY = 'vanessa-theme';
 const PROFILE_KEY = 'vanessa-profile';
 const MODEL_KEY = 'vanessa-model';
 const MIGRATION_KEY = 'vanessa-history-migrated';
 const PROFILES = ['Vincent', 'Dolly'];
+const MAX_ATTACHMENTS = 5;
 
 let currentProfile = localStorage.getItem(PROFILE_KEY);
 if (!PROFILES.includes(currentProfile)) {
@@ -21,19 +23,29 @@ let isLoading = false;
 let currentModel = '';
 let currentVersion = '';
 let maxFileSizeMb = 10;
+let modelCatalog = [];
 let pendingAttachments = [];
 const messageAttachments = new Map();
 let profileLoadGeneration = 0;
 let activeStream = null;
 
 function conversationIdFromUrl() {
-  return new URL(window.location.href).searchParams.get('conversation');
+  const prefix = `${APP_BASE_PATH}/`;
+  const pathname = window.location.pathname;
+  if (!pathname.startsWith(prefix)) return null;
+  const segment = pathname.slice(prefix.length);
+  if (!segment || segment.includes('/')) return null;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
 }
 
 function setConversationUrl(id, { replace = false } = {}) {
   const url = new URL(window.location.href);
-  if (id) url.searchParams.set('conversation', id);
-  else url.searchParams.delete('conversation');
+  url.pathname = id ? `${APP_BASE_PATH}/${encodeURIComponent(id)}` : `${APP_BASE_PATH}/`;
+  url.search = '';
   window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
 }
 
@@ -71,8 +83,9 @@ document.querySelector('#app').innerHTML = `
     <ul class="history-list" id="history-list"></ul>
     <div class="sidebar-footer"><button class="profile-button" id="profile-button" title="Đổi người dùng"><span class="avatar" id="profile-avatar"></span><span id="profile-name"></span></button><button class="theme-toggle" id="theme-toggle" aria-label="Đổi giao diện"></button></div>
   </aside>
+  <button class="sidebar-backdrop" type="button" aria-label="Đóng menu"></button>
   <main class="chat-area app-shell hidden" id="chat-area">
-    <header class="chat-header"><div><div class="chat-title" id="chat-title">Cuộc trò chuyện mới</div><small class="app-version" id="app-version">Đang kết nối...</small></div><div class="header-actions"><label class="model-picker"><span>Model</span><select id="model-select" aria-label="Chọn model" disabled><option>Đang tải...</option></select></label><button class="mobile-menu" id="mobile-menu" aria-label="Mở menu">${icons.menu}</button></div></header>
+    <header class="chat-header"><div><div class="chat-title" id="chat-title">Cuộc trò chuyện mới</div><small class="app-version" id="app-version">Đang kết nối...</small></div><div class="header-actions"><div class="model-picker"><span class="model-picker-label">Model</span><select id="model-select" aria-label="Chọn model" disabled><option>Đang tải...</option></select><button class="model-menu-trigger" id="model-menu-trigger" type="button" aria-label="Chọn model" aria-haspopup="listbox" aria-controls="model-menu" aria-expanded="false" disabled>Đang tải...</button><button class="reload-models" id="reload-models" type="button" title="Cập nhật danh sách model" aria-label="Cập nhật danh sách model" hidden>${icons.reload}</button><div class="model-menu hidden" id="model-menu" role="listbox" aria-label="Danh sách model"></div></div><button class="delete-conversation" id="delete-conversation" type="button" title="Xóa cuộc trò chuyện" aria-label="Xóa cuộc trò chuyện" hidden>${icons.trash}</button><button class="mobile-menu" id="mobile-menu" aria-label="Mở menu">${icons.menu}</button></div></header>
     <section class="messages" id="messages"></section>
     <button class="scroll-bottom hidden" id="scroll-bottom" type="button" aria-label="Cuộn xuống cuối">${icons.arrowDown}</button>
     <form class="composer" id="composer">
@@ -81,7 +94,32 @@ document.querySelector('#app').innerHTML = `
     </form>
   </main>`;
 
-const elements = Object.fromEntries(['startup-gate', 'startup-spinner', 'startup-message', 'startup-retry', 'sidebar', 'chat-area', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version', 'model-select', 'auth-gate', 'auth-form', 'auth-password', 'auth-error', 'auth-submit'].map(id => [id, document.getElementById(id)]));
+const elements = Object.fromEntries(['startup-gate', 'startup-spinner', 'startup-message', 'startup-retry', 'sidebar', 'chat-area', 'history-list', 'chat-title', 'messages', 'scroll-bottom', 'composer', 'prompt', 'send', 'attach', 'file-input', 'attachment-list', 'new-chat', 'theme-toggle', 'mobile-menu', 'profile-gate', 'profile-button', 'profile-avatar', 'profile-name', 'app-version', 'model-select', 'model-menu-trigger', 'model-menu', 'reload-models', 'auth-gate', 'auth-form', 'auth-password', 'auth-error', 'auth-submit'].map(id => [id, document.getElementById(id)]));
+document.body.append(elements['model-menu']);
+const appNotice = document.createElement('div');
+appNotice.className = 'app-notice hidden';
+appNotice.setAttribute('role', 'status');
+appNotice.setAttribute('aria-live', 'polite');
+document.body.append(appNotice);
+let appNoticeTimer;
+
+function showNotice(message, type = 'success') {
+  window.clearTimeout(appNoticeTimer);
+  appNotice.replaceChildren();
+  appNotice.dataset.kind = type;
+  const text = document.createElement('span');
+  text.className = 'app-notice-text';
+  text.textContent = message;
+  const close = document.createElement('button');
+  close.className = 'app-notice-close';
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Đóng thông báo');
+  close.innerHTML = icons.close;
+  close.addEventListener('click', () => appNotice.classList.add('hidden'), { once: true });
+  appNotice.append(text, close);
+  appNotice.classList.remove('hidden');
+  if (type !== 'error') appNoticeTimer = window.setTimeout(() => appNotice.classList.add('hidden'), 5000);
+}
 
 function storageKey(profile = currentProfile) {
   return `${STORAGE_PREFIX}:${profile?.toLowerCase()}`;
@@ -192,7 +230,16 @@ function save() {
 }
 
 function formatTime(value) {
-  return new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+  const date = new Date(value);
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const sameDay = date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+  const sameAsYesterday = date.getFullYear() === yesterday.getFullYear() && date.getMonth() === yesterday.getMonth() && date.getDate() === yesterday.getDate();
+  const time = new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit' }).format(date);
+  if (sameDay) return time;
+  if (sameAsYesterday) return `Hôm qua, ${time}`;
+  const day = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
+  return `${day}, ${time}`;
 }
 
 function renderMarkdown(content) {
@@ -262,6 +309,9 @@ function stripThinking(content) {
 
 function render({ scrollToEnd = false, revealAtEnd = false } = {}) {
   const conversation = activeConversation();
+  const isNewChat = !conversation?.messages.length;
+  elements['chat-area'].classList.toggle('new-chat-view', isNewChat);
+  document.getElementById('delete-conversation').hidden = !conversation;
   if (revealAtEnd) elements.messages.style.visibility = 'hidden';
   elements['history-list'].innerHTML = conversations.map(item => `<li class="history-item ${item.id === activeId ? 'active' : ''}" data-id="${item.id}"><span class="history-title">${escapeHtml(item.title)}</span><button class="delete-chat" data-delete="${item.id}" aria-label="Xóa cuộc trò chuyện">${icons.trash}</button></li>`).join('');
   elements['chat-title'].textContent = conversation?.title || 'Cuộc trò chuyện mới';
@@ -310,7 +360,7 @@ function render({ scrollToEnd = false, revealAtEnd = false } = {}) {
 function renderEmptyState() {
   const wrapper = document.createElement('div');
   wrapper.className = 'empty-state';
-  wrapper.innerHTML = '<h2>Xin chào, tôi là Vanessa.</h2><p>Tôi hỗ trợ hỏi đáp, phân tích thông tin, soạn thảo và tổng hợp nội dung theo yêu cầu của bạn.</p>';
+  wrapper.innerHTML = `<div class="empty-state-mark" aria-hidden="true">${icons.secretary}</div><p class="empty-state-eyebrow">TRỢ LÝ CÁ NHÂN</p><h1>Xin chào, ${escapeHtml(currentProfile || '')}.</h1><p class="empty-state-description">Tôi có thể giúp bạn suy nghĩ, viết và tìm câu trả lời.</p>`;
   return wrapper;
 }
 
@@ -423,8 +473,6 @@ function escapeHtml(value) {
 }
 
 async function createConversation() {
-  pendingAttachments = [];
-  renderAttachments();
   const conversation = { id: crypto.randomUUID(), title: 'Cuộc trò chuyện mới', messages: [], createdAt: Date.now() };
   await api('/conversations', { method: 'POST', body: JSON.stringify({ ...conversation, profile: currentProfile }) });
   conversations.unshift(conversation);
@@ -447,6 +495,7 @@ async function selectProfile(profile) {
   renderAttachments();
   localStorage.setItem(PROFILE_KEY, profile);
   elements['profile-gate'].classList.add('hidden');
+  elements['reload-models'].hidden = currentProfile !== 'Vincent';
   render();
   elements.prompt.focus();
 }
@@ -546,7 +595,7 @@ async function submitPrompt(event) {
     conversation.messages.splice(-2, 2);
     messageAttachments.delete(userMessage.id);
     render();
-    window.alert(`Không thể lưu tin nhắn. ${error.message}`);
+    showNotice(`Không thể lưu tin nhắn. ${error.message}`, 'error');
     return;
   }
   if (nextTitle) conversation.title = nextTitle;
@@ -655,9 +704,9 @@ elements.prompt.addEventListener('input', () => {
 });
 elements.attach.addEventListener('click', () => elements['file-input'].click());
 elements['file-input'].addEventListener('change', async event => {
-  const slots = Math.max(0, 5 - pendingAttachments.length);
-  for (const file of [...event.target.files].slice(0, slots)) await uploadAttachment(file);
+  const files = [...event.target.files];
   event.target.value = '';
+  await addAttachments(files);
 });
 document.addEventListener('paste', async event => {
   if (isLoading || !currentProfile) return;
@@ -667,12 +716,11 @@ document.addEventListener('paste', async event => {
     .filter(Boolean);
   if (!images.length) return;
   event.preventDefault();
-  const slots = Math.max(0, 5 - pendingAttachments.length);
-  for (const [index, image] of images.slice(0, slots).entries()) {
+  const files = images.map((image, index) => {
     const extension = image.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
-    const file = new File([image], `clipboard-${Date.now()}-${index + 1}.${extension}`, { type: image.type });
-    await uploadAttachment(file);
-  }
+    return new File([image], `clipboard-${Date.now()}-${index + 1}.${extension}`, { type: image.type });
+  });
+  await addAttachments(files);
 });
 elements['attachment-list'].addEventListener('click', event => {
   const retryButton = event.target.closest('[data-retry-file]');
@@ -745,15 +793,88 @@ elements['theme-toggle'].addEventListener('click', () => {
   updateThemeIcon();
 });
 elements['mobile-menu'].addEventListener('click', () => elements.sidebar.classList.toggle('open'));
+document.querySelector('.sidebar-backdrop').addEventListener('click', () => elements.sidebar.classList.remove('open'));
+document.getElementById('delete-conversation').addEventListener('click', async event => {
+  if (isLoading || !activeId) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await deleteConversation(activeId);
+    } catch (error) {
+    showNotice(`Không thể xóa cuộc trò chuyện. ${error.message}`, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
 elements['model-select'].addEventListener('change', event => {
   currentModel = event.target.value;
   localStorage.setItem(MODEL_KEY, currentModel);
   elements['app-version'].textContent = `${currentModel} · ${currentVersion}`;
+  renderAttachments();
+});
+elements['model-menu-trigger'].addEventListener('click', () => {
+  const isOpen = !elements['model-menu'].classList.contains('hidden');
+  elements['model-menu'].classList.toggle('hidden', isOpen);
+  elements['model-menu-trigger'].setAttribute('aria-expanded', String(!isOpen));
+  if (!isOpen) {
+    positionModelMenu();
+    elements['model-menu'].querySelector('[role="option"]')?.focus();
+  }
+});
+elements['model-menu'].addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    elements['model-menu'].classList.add('hidden');
+    elements['model-menu-trigger'].setAttribute('aria-expanded', 'false');
+    elements['model-menu-trigger'].focus();
+    return;
+  }
+  if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+  const options = [...elements['model-menu'].querySelectorAll('[role="option"]')];
+  const direction = event.key === 'ArrowDown' ? 1 : -1;
+  const next = Math.max(0, Math.min(options.length - 1, options.indexOf(document.activeElement) + direction));
+  event.preventDefault();
+  options[next]?.focus();
+});
+elements['model-menu'].addEventListener('click', event => {
+  const option = event.target.closest('[data-model-id]');
+  if (!option) return;
+  elements['model-select'].value = option.dataset.modelId;
+  elements['model-select'].dispatchEvent(new Event('change', { bubbles: true }));
+  elements['model-menu'].querySelectorAll('[data-model-id]').forEach(item => item.setAttribute('aria-selected', String(item.dataset.modelId === currentModel)));
+  elements['model-menu'].classList.add('hidden');
+  elements['model-menu-trigger'].setAttribute('aria-expanded', 'false');
+  elements['model-menu-trigger'].innerHTML = modelNameMarkup(currentModelInfo());
+});
+document.addEventListener('click', event => {
+  if (!event.target.closest('.model-picker') && !elements['model-menu'].contains(event.target)) {
+    elements['model-menu'].classList.add('hidden');
+    elements['model-menu-trigger'].setAttribute('aria-expanded', 'false');
+  }
+});
+window.addEventListener('resize', () => {
+  if (!elements['model-menu'].classList.contains('hidden')) positionModelMenu();
+});
+elements['reload-models'].addEventListener('click', async event => {
+  if (currentProfile !== 'Vincent' || event.currentTarget.disabled) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.classList.add('loading');
+  try {
+    const result = await api('/models/refresh', { method: 'POST', body: JSON.stringify({ profile: currentProfile }) });
+    const selectedModel = modelCatalog.some(model => model.id === currentModel) ? currentModel : result.models[0]?.id;
+    renderModelOptions(result.models, selectedModel);
+    showNotice(`Đã cập nhật ${result.models.length} model.`);
+  } catch (error) {
+    showNotice(`Không thể cập nhật danh sách model. ${error.message}`, 'error');
+  } finally {
+    button.disabled = false;
+    button.classList.remove('loading');
+  }
 });
 elements['profile-button'].addEventListener('click', () => elements['profile-gate'].classList.remove('hidden'));
 elements['profile-gate'].addEventListener('click', event => {
   const option = event.target.closest('[data-profile]');
-  if (option) selectProfile(option.dataset.profile).catch(error => window.alert(`Không thể tải lịch sử trò chuyện. ${error.message}`));
+  if (option) selectProfile(option.dataset.profile).catch(error => showNotice(`Không thể tải lịch sử trò chuyện. ${error.message}`, 'error'));
 });
 window.addEventListener('popstate', () => {
   if (isLoading) return;
@@ -768,21 +889,21 @@ async function initializeApp() {
   const response = await fetch(`${API_BASE}/config`);
   if (!response.ok) throw new Error(await responseError(response));
   const config = await response.json();
-  const models = Array.isArray(config.models) && config.models.length ? config.models : [config.model];
+  const remoteModels = await api('/models');
+  modelCatalog = Array.isArray(remoteModels.models) ? remoteModels.models : [];
+  const models = modelCatalog.length ? modelCatalog : [{ id: config.model, provider: 'Mặc định', canReadImages: false, canCreateImages: false, costTier: 'standard' }];
   const savedModel = localStorage.getItem(MODEL_KEY);
-  currentModel = models.includes(savedModel) ? savedModel : config.model;
+  currentModel = models.some(model => model.id === savedModel) ? savedModel : config.model;
   currentVersion = config.version;
   maxFileSizeMb = config.maxFileSizeMb;
-  elements['model-select'].replaceChildren(...models.map(model => new Option(model, model)));
-  elements['model-select'].value = currentModel;
-  elements['model-select'].disabled = false;
-  elements['app-version'].textContent = `${currentModel} · ${config.version}`;
-  updateSendState();
+  elements['reload-models'].hidden = currentProfile !== 'Vincent';
+  renderModelOptions(models, currentModel);
   const loaded = await loadProfileData();
   if (loaded) {
     conversations = loaded.conversations;
     activeId = loaded.activeId;
-    if (conversationIdFromUrl() && !activeId) setConversationUrl(null, { replace: true });
+    if (window.location.search) setConversationUrl(conversationIdFromUrl(), { replace: true });
+    if (currentProfile && conversationIdFromUrl() && !activeId) setConversationUrl(null, { replace: true });
   }
   render({ scrollToEnd: true, revealAtEnd: true });
   elements['startup-gate'].classList.add('hidden');
@@ -790,6 +911,126 @@ async function initializeApp() {
   elements['auth-gate'].classList.add('hidden');
   if (!currentProfile) elements['profile-gate'].classList.remove('hidden');
   elements.prompt.focus();
+}
+
+function renderModelOptions(models, selectedModel) {
+  modelCatalog = models;
+  const groups = new Map();
+  for (const model of models) {
+    if (!groups.has(model.provider)) groups.set(model.provider, []);
+    groups.get(model.provider).push(model);
+  }
+  elements['model-select'].replaceChildren(...[...groups].map(([provider, providerModels]) => {
+    const group = document.createElement('optgroup');
+    group.label = provider || 'Khác';
+    group.append(...providerModels.map(model => new Option(model.id, model.id)));
+    return group;
+  }));
+  currentModel = models.some(model => model.id === selectedModel) ? selectedModel : models[0]?.id || '';
+  elements['model-select'].value = currentModel;
+  elements['model-select'].disabled = false;
+  elements['model-menu-trigger'].disabled = false;
+  elements['model-menu-trigger'].innerHTML = modelNameMarkup(currentModelInfo());
+  elements['model-menu'].replaceChildren();
+  for (const [provider, providerModels] of groups) {
+    const heading = document.createElement('div');
+    heading.className = 'model-provider';
+    const logoUrl = providerModels[0].providerLogo;
+    if (logoUrl) {
+      const logo = document.createElement('img');
+      logo.src = logoUrl.startsWith('/') ? `https://mezon-llm.mrdnd.dev${logoUrl}` : logoUrl;
+      logo.alt = '';
+      logo.loading = 'lazy';
+      logo.onerror = () => logo.remove();
+      heading.append(logo);
+    }
+    const label = document.createElement('span');
+    label.textContent = provider || 'Khác';
+    heading.append(label);
+    elements['model-menu'].append(heading);
+    for (const model of providerModels) {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'model-option';
+      option.dataset.modelId = model.id;
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(model.id === currentModel));
+      const name = document.createElement('span');
+      name.className = 'model-option-name';
+      name.textContent = model.id;
+      const { price, features } = modelMetadataMarkup(model);
+      option.append(price, name, features);
+      elements['model-menu'].append(option);
+    }
+  }
+  localStorage.setItem(MODEL_KEY, currentModel);
+  elements['app-version'].textContent = `${currentModel} · ${currentVersion}`;
+  updateSendState();
+}
+
+function modelMetadataMarkup(model) {
+  const price = document.createElement('span');
+  price.className = 'model-price-indicator';
+  price.setAttribute('aria-label', `Mức giá ${model.costTier || 'standard'}`);
+  const priceIcons = { cheap: 1, standard: 2, expensive: 3, 'super-expensive': 4 }[model.costTier] ?? 2;
+  for (let index = 0; index < priceIcons; index += 1) addModelIcon(price, icons.dollar, 'Giá');
+
+  const features = document.createElement('span');
+  features.className = 'model-feature-indicators';
+  addFeatureIcon(features, icons.document, 'Văn bản', true);
+  addFeatureIcon(features, icons.picture, 'Đọc ảnh', model.canReadImages);
+  addFeatureIcon(features, icons.pictureEdit, 'Tạo ảnh', model.canCreateImages);
+  return { price, features };
+}
+
+function addModelIcon(container, markup, label) {
+  const icon = document.createElement('span');
+  icon.className = 'model-capability-icon';
+  icon.title = label;
+  icon.setAttribute('aria-label', label);
+  icon.innerHTML = markup;
+  container.append(icon);
+}
+
+function addFeatureIcon(container, markup, label, available) {
+  const icon = document.createElement('span');
+  icon.className = `model-capability-icon ${available ? 'available' : 'unavailable'}`;
+  icon.title = `${label}: ${available ? 'có' : 'không'}`;
+  icon.setAttribute('aria-label', icon.title);
+  icon.innerHTML = markup;
+  container.append(icon);
+}
+
+function modelNameMarkup(model) {
+  if (!model) return 'Chọn model';
+  const providerLogo = model.providerLogo ? document.createElement('img') : null;
+  if (providerLogo) {
+    providerLogo.className = 'model-selected-provider-logo';
+    providerLogo.src = model.providerLogo.startsWith('/') ? `https://mezon-llm.mrdnd.dev${model.providerLogo}` : model.providerLogo;
+    providerLogo.alt = '';
+    providerLogo.onerror = () => providerLogo.remove();
+  } else {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'model-selected-provider-placeholder';
+    wrapper.append(placeholder);
+  }
+  const name = document.createElement('span');
+  name.className = 'model-option-name';
+  name.textContent = model.id;
+  const wrapper = document.createElement('span');
+  wrapper.className = 'model-trigger-content';
+  if (providerLogo) wrapper.append(providerLogo);
+  wrapper.append(name);
+  return wrapper.outerHTML;
+}
+
+function positionModelMenu() {
+  const trigger = elements['model-menu-trigger'].getBoundingClientRect();
+  const width = Math.min(390, window.innerWidth - 24);
+  const left = Math.max(12, Math.min(trigger.right - width, window.innerWidth - width - 12));
+  elements['model-menu'].style.left = `${left}px`;
+  elements['model-menu'].style.top = `${trigger.bottom + 8}px`;
+  elements['model-menu'].style.width = `${width}px`;
 }
 
 async function startAuthenticatedApp() {
@@ -846,11 +1087,24 @@ checkAuthentication();
 setupScrollButton();
 
 async function uploadAttachment(file) {
+  if (file.type.startsWith('image/') && !currentModelInfo()?.canReadImages) {
+    showNotice(`Model ${currentModel} không hỗ trợ đọc ảnh. Hãy chọn model có icon ảnh màu xanh.`, 'error');
+    return;
+  }
   const attachment = { name: file.name, type: file.type, file, loading: true, error: '' };
   pendingAttachments.push(attachment);
   renderAttachments();
   if (file.type.startsWith('image/')) await readImageAttachment(attachment);
   else await extractAttachment(attachment);
+}
+
+async function addAttachments(files) {
+  const slots = Math.max(0, MAX_ATTACHMENTS - pendingAttachments.length);
+  const selected = files.slice(0, slots);
+  if (files.length > selected.length) {
+    showNotice(`Mỗi tin nhắn đính kèm tối đa ${MAX_ATTACHMENTS} tệp. Đã thêm ${selected.length} tệp còn chỗ.`, 'error');
+  }
+  await Promise.all(selected.map(uploadAttachment));
 }
 
 async function retryAttachment(index) {
@@ -903,7 +1157,13 @@ function renderAttachments() {
 }
 
 function updateSendState() {
-  elements.send.disabled = !currentModel || isLoading || pendingAttachments.some(file => file.loading) || (!elements.prompt.value.trim() && !pendingAttachments.some(file => file.content || file.imageUrl));
+  const hasUnsupportedImage = pendingAttachments.some(file => file.file?.type.startsWith('image/') && !currentModelInfo()?.canReadImages);
+  elements.attach.disabled = !currentModel || isLoading;
+  elements.send.disabled = !currentModel || isLoading || hasUnsupportedImage || pendingAttachments.some(file => file.loading) || (!elements.prompt.value.trim() && !pendingAttachments.some(file => file.content || file.imageUrl));
+}
+
+function currentModelInfo() {
+  return modelCatalog.find(model => model.id === currentModel) || null;
 }
 
 function isNearBottom(container, threshold = 120) {
