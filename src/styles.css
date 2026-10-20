@@ -154,6 +154,7 @@ body { margin: 0; background: var(--bg); color: var(--text); transition: backgro
 .user .bubble { background: var(--user-bubble); border-bottom-right-radius: 6px; }
 .assistant .bubble { background: var(--ai-bubble); border-bottom-left-radius: 6px; }
 .meta { font-size: 0.75rem; color: var(--muted); display: flex; gap: 10px; align-items: center; }
+.message-status { color: #b74848; }
 .copy-btn, .retry-message-btn { background: transparent; border: none; cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; }
 .copy-btn svg, .retry-message-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; }
 .copy-btn:hover, .retry-message-btn:hover { color: var(--accent); }
@@ -205,6 +206,7 @@ textarea {
 }
 .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .send-btn:not(:disabled):hover { transform: translateY(-1px); }
+.send-btn.stopping { background: #b74848; }
 .send-btn svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; }
 
 .empty-state { margin: auto; text-align: center; color: var(--muted); max-width: 360px; line-height: 1.6; }
