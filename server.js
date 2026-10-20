@@ -10,6 +10,7 @@ import multer from 'multer';
 import path from 'node:path';
 import { PDFParse } from 'pdf-parse';
 import { fileURLToPath } from 'node:url';
+import modelCatalog from './model-catalog.json' with { type: 'json' };
 import { addMessage, addTurn, createConversation, deleteConversationForProfile, getConversationForProfile, importConversations, listConversations, listMessages, updateConversationTitleForProfile, updateMessageContent } from './db.js';
 
 const app = express();
@@ -27,6 +28,10 @@ const authCookie = 'vanessa_auth';
 const authMaxAgeSeconds = 365 * 24 * 60 * 60;
 const loginAttempts = new Map();
 const supportedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const modelById = new Map(modelCatalog.map(model => [model.id.toLowerCase(), model]));
+const modelCatalogPath = path.join(root, 'model-catalog.json');
+const modelSourceUrl = 'https://mezon-llm.mrdnd.dev/models';
+const defaultRequestTokens = 5000;
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: maxFileBytes, files: 1 },
@@ -39,10 +44,100 @@ const textExtensions = new Set([
 ]);
 
 function configuredModels() {
-  const models = [process.env.MODEL || 'gpt-4o-mini', ...(process.env.MODEL_FALLBACKS || '').split(',')]
+  const models = [process.env.MODEL || modelCatalog[0].id, ...(process.env.MODEL_FALLBACKS || '').split(',')]
     .map(model => model.trim())
     .filter(Boolean);
   return [...new Set(models)].slice(0, 4);
+}
+
+function publicModelCatalog() {
+  return modelCatalog.map(({ id, provider, providerLogo, canReadImages, canCreateImages, costMzd }) => ({
+    id, provider, providerLogo, canReadImages, canCreateImages,
+    costTier: costMzd > 100 ? 'super-expensive' : costMzd > 45 ? 'expensive' : costMzd < 10 ? 'cheap' : 'standard',
+  }));
+}
+
+function extractModelsPayload(html) {
+  const marker = /\\"models\\":\[/g;
+  const match = marker.exec(html);
+  const start = match?.index ?? -1;
+  if (start < 0) throw new Error('Không tìm thấy dữ liệu model từ trang bảng giá.');
+  const arrayStart = start + match[0].lastIndexOf('[');
+  const end = html.indexOf('}],', arrayStart);
+  if (end < 0) throw new Error('Dữ liệu model từ trang bảng giá không đầy đủ.');
+  return parseSerializedModelArray(html.slice(arrayStart, end + 2).replace(/\\"/g, '"'));
+}
+
+function parseSerializedModelArray(serialized) {
+  const models = [];
+  let objectStart = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < serialized.length; index += 1) {
+    const character = serialized[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '{') {
+      if (depth === 0) objectStart = index;
+      depth += 1;
+    } else if (character === '}' && --depth === 0 && objectStart >= 0) {
+      const object = serialized.slice(objectStart, index + 1);
+      const value = key => object.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`))?.[1];
+      const fields = Object.fromEntries(['name', 'provider', 'providerLogoSrc', 'inputPrice', 'outputPrice', 'priceUnit'].map(key => [key, value(key)]));
+      if (fields.name && fields.provider) models.push(fields);
+      objectStart = -1;
+    }
+  }
+  return models;
+}
+
+function priceNumber(value) {
+  const number = Number(String(value || '').replace(/,/g, ''));
+  return Number.isFinite(number) ? number : null;
+}
+
+function modelCost(model) {
+  const input = priceNumber(model.inputPrice);
+  const output = priceNumber(model.outputPrice);
+  if (model.priceUnit === 'per-request') return input;
+  if (input == null || output == null) return null;
+  return ((input + output) * defaultRequestTokens / 2) / 1_000_000;
+}
+
+async function fetchRemoteModelCatalog() {
+  const response = await fetch(modelSourceUrl, { signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error(`Nguồn bảng giá trả về HTTP ${response.status}.`);
+  const html = await response.text();
+  const existing = new Map(modelCatalog.map(model => [model.id.toLowerCase(), model]));
+  const refreshed = extractModelsPayload(html).map(model => {
+    const costMzd = modelCost(model);
+    if (!model.name || costMzd == null) return null;
+    return {
+      id: model.name,
+      provider: model.provider || 'Không rõ',
+      providerLogo: model.providerLogoSrc || '',
+      costMzd: Number(costMzd.toFixed(4)),
+      canReadImages: existing.get(model.name.toLowerCase())?.canReadImages ?? false,
+      canCreateImages: false,
+    };
+  }).filter(Boolean).sort((left, right) => right.costMzd - left.costMzd);
+  if (!refreshed.length) throw new Error('Không tìm thấy model có giá hợp lệ.');
+  return refreshed;
+}
+
+async function refreshModelCatalog() {
+  const refreshed = await fetchRemoteModelCatalog();
+  fs.writeFileSync(modelCatalogPath, `${JSON.stringify(refreshed, null, 2)}\n`, 'utf8');
+  modelCatalog.splice(0, modelCatalog.length, ...refreshed);
+  modelById.clear();
+  refreshed.forEach(model => modelById.set(model.id.toLowerCase(), model));
+  return refreshed;
 }
 
 function safeEqual(left, right) {
@@ -336,7 +431,36 @@ app.use(`${basePath}/api`, (req, res, next) => {
 });
 
 app.get(`${basePath}/api/config`, (_req, res) => {
-  res.json({ model: activeModel || configuredModels()[0], models: configuredModels(), version: '2026.09.29-1', maxFileSizeMb: maxFileBytes / 1024 / 1024 });
+  const configured = configuredModels();
+  const requestedDefault = configured[0].toLowerCase();
+  const defaultModel = modelCatalog.find(model => model.id.toLowerCase() === requestedDefault)?.id || modelCatalog[0].id;
+  res.json({ model: activeModel || defaultModel, version: '2026.09.29-1', maxFileSizeMb: maxFileBytes / 1024 / 1024 });
+});
+
+app.get(`${basePath}/api/models`, async (_req, res) => {
+  try {
+    const models = await fetchRemoteModelCatalog();
+    res.json({ models: models.map(({ id, provider, providerLogo, canReadImages, canCreateImages, costMzd }) => ({
+      id, provider, providerLogo, canReadImages, canCreateImages,
+      costTier: costMzd > 100 ? 'super-expensive' : costMzd > 45 ? 'expensive' : costMzd < 10 ? 'cheap' : 'standard',
+    })) });
+  } catch (error) {
+    log('ERROR', `Remote model list failed: ${error.message}`);
+    res.status(502).json({ error: `Không thể tải danh sách model: ${error.message}` });
+  }
+});
+
+app.post(`${basePath}/api/models/refresh`, async (req, res) => {
+  if (String(requestProfile(req) || '').toLowerCase() !== 'vincent') {
+    return res.status(403).json({ error: 'Chỉ profile Vincent được cập nhật danh sách model.' });
+  }
+  try {
+    const models = await refreshModelCatalog();
+    res.json({ models: publicModelCatalog(), model: models[0].id, requestTokens: defaultRequestTokens });
+  } catch (error) {
+    log('ERROR', `Model catalog refresh failed: ${error.message}`);
+    res.status(502).json({ error: `Không thể cập nhật danh sách model: ${error.message}` });
+  }
 });
 
 function validProfile(value) {
@@ -450,6 +574,9 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Vui lòng nhập nội dung tin nhắn.' });
   }
+  if (Array.isArray(attachments) && attachments.some(attachment => typeof attachment?.imageUrl === 'string') && !modelById.get(String(requestedModel || '').toLowerCase())?.canReadImages) {
+    return res.status(400).json({ error: `Model ${requestedModel || 'đang chọn'} không hỗ trợ phân tích ảnh. Hãy chọn model có hỗ trợ ảnh.` });
+  }
   if (!process.env.OPENAI_API_KEY) {
     return res.status(500).json({ error: 'Server chưa được cấu hình OPENAI_API_KEY.' });
   }
@@ -518,8 +645,8 @@ app.post(`${basePath}/api/chat`, async (req, res) => {
     const configured = configuredModels();
     const hasImages = Array.isArray(attachments) && attachments.some(attachment => typeof attachment?.imageUrl === 'string');
     const preferredModel = hasImages && configured.includes('gpt-5.6-sol') ? 'gpt-5.6-sol' : requestedModel;
-    const models = configured.includes(preferredModel)
-      ? [preferredModel, ...configured.filter(model => model !== preferredModel)]
+    const models = modelById.has(String(preferredModel || '').toLowerCase())
+      ? [preferredModel, ...configured.filter(model => model.toLowerCase() !== String(preferredModel).toLowerCase())]
       : configured;
     let upstream;
     let selectedModel;
